@@ -1,0 +1,1464 @@
+// D' Educationist Accounting System — full normalized PostgreSQL schema (M1)
+// Milestone M1: tables only. Business APIs / seed data arrive in later milestones.
+// Do not treat empty tables as a working product.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum PermissionLevel {
+  full
+  read
+  limited
+  none
+}
+
+enum ApplicationStatus {
+  Applied
+  Offer
+  Visa
+  Enrolled
+  Deferred
+  Withdrawn
+}
+
+enum InvoiceStatus {
+  Draft
+  Sent
+  PartiallyReceived
+  FullyReceived
+  Closed
+
+  @@map("InvoiceStatus")
+}
+
+enum OtherInvoiceStatus {
+  Draft
+  Sent
+  Paid
+  Closed
+}
+
+enum ApprovalStatus {
+  Pending
+  Approved
+  Rejected
+}
+
+enum ReconciliationStatus {
+  Matched
+  Unmatched
+}
+
+enum AllocationStatus {
+  pending
+  allocated
+}
+
+enum SubAgentCommissionStatus {
+  Pending
+  Partial
+  Paid
+}
+
+enum PettyCashEntryType {
+  in
+  out
+}
+
+enum PayrollRunStatus {
+  Draft
+  Processed
+  Paid
+}
+
+enum PayrollSource {
+  Internal
+  Uploaded
+}
+
+enum ReimbursementType {
+  Travel
+  Fuel
+  Reimbursement
+  AdvanceSettlement
+
+  @@map("ReimbursementType")
+}
+
+enum BankTransactionType {
+  deposit
+  withdrawal
+  transfer
+}
+
+enum ChequeStatus {
+  Issued
+  Cleared
+  Bounced
+}
+
+enum GlAccountType {
+  asset
+  liability
+  equity
+  income
+  expense
+}
+
+enum JournalSourceType {
+  Manual
+  Invoice
+  Receivable
+  Expense
+  PettyCash
+  Payroll
+  Reversal
+  OtherInvoice
+  SubAgentPayment
+  Contra
+  /// Accrual on commission create (Dr Exp / Cr AP + WHT)
+  SubAgentCommission
+  /// Cash settlement after payroll accrual (Dr Salary Payable / Cr Bank)
+  PayrollPayment
+  /// Bank receipt before invoice allocation
+  BulkReceivable
+}
+
+enum ContraEntryType {
+  CashBank
+  BankBank
+  CashCash
+
+  @@map("ContraEntryType")
+}
+
+enum TaxType {
+  WhtReceivable
+  WhtPayable
+  GstInput
+  GstOutput
+  SrbSst
+  SalaryTax
+
+  @@map("TaxType")
+}
+
+enum PartyType {
+  student
+  vendor
+  sub_agent
+}
+
+enum DocumentType {
+  Invoice
+  Receipt
+  Bill
+  Contract
+  Agreement
+}
+
+enum ApprovalType {
+  Expense
+  SubAgentPayout
+  Journal
+  Refund
+  Reimbursement
+  Payroll
+
+  @@map("ApprovalType")
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  LOGIN
+  LOGOUT
+  LOGIN_FAILED
+  SEND
+  CLOSE
+  PROCESS
+  PAY
+  ALLOCATE
+  REVERSE
+  IMPORT
+  EXPORT
+  OTHER
+}
+
+enum TenantStatus {
+  Active
+  Suspended
+  Trial
+}
+
+enum SmtpProvider {
+  GMAIL
+  MICROSOFT365
+  OUTLOOK
+  CUSTOM
+}
+
+enum SmtpAuthMode {
+  PASSWORD
+  OAUTH
+}
+
+// ─── Multi-tenant (MT1) ───────────────────────────────────────────────────────
+// Platform-shared (no tenantId): Role, AppModule, RoleModulePermission, Currency,
+// PaymentMode, Country, SalaryTaxSlab.
+// Child rows (invoice lines, journal lines, …) inherit tenant via parent FK.
+
+model Tenant {
+  id        String       @id @default(uuid()) @db.Uuid
+  code      String       @unique @db.VarChar(40)
+  name      String       @db.VarChar(160)
+  status    TenantStatus @default(Active)
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+  deletedAt DateTime?    @map("deleted_at")
+
+  branches            Branch[]
+  users               User[]
+  fxRates             FxRate[]
+  systemSettings      SystemSetting[]
+  expenseCategories   ExpenseCategory[]
+  pettyCashCategories PettyCashCategory[]
+  universities        University[]
+  subAgents           SubAgent[]
+  vendors             Vendor[]
+  students            Student[]
+  invoices            Invoice[]
+  otherInvoices       OtherInvoice[]
+  bankAccounts        BankAccount[]
+  receivables         Receivable[]
+  subAgentCommissions SubAgentCommission[]
+  subAgentPayments    SubAgentPayment[]
+  pettyCashEntries    PettyCashEntry[]
+  expenses            Expense[]
+  bankTransactions    BankTransaction[]
+  cheques             Cheque[]
+  contraEntries       ContraEntry[]
+  glAccounts          GlAccount[]
+  journalEntries      JournalEntry[]
+  partyLedgerEntries  PartyLedgerEntry[]
+  taxRecords          TaxRecord[]
+  employees           Employee[]
+  payrollRuns         PayrollRun[]
+  reimbursements      Reimbursement[]
+  documents           Document[]
+  approvals           Approval[]
+  auditLogs           AuditLog[]
+  smtpConfig          TenantSmtpConfig?
+  notifications       Notification[]
+
+  @@map("tenants")
+}
+
+// ─── Org / security ───────────────────────────────────────────────────────────
+
+model Branch {
+  id           String    @id @default(uuid()) @db.Uuid
+  tenantId     String    @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  code         String    @db.VarChar(20)
+  name         String    @db.VarChar(120)
+  city         String    @db.VarChar(80)
+  isHeadOffice Boolean   @default(false) @map("is_head_office")
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  tenant              Tenant               @relation(fields: [tenantId], references: [id])
+  users               User[]
+  userBranchAccess    UserBranchAccess[]
+  students            Student[]
+  invoices            Invoice[]
+  otherInvoices       OtherInvoice[]
+  receivables         Receivable[]
+  subAgentCommissions SubAgentCommission[]
+  pettyCashEntries    PettyCashEntry[]
+  expenses            Expense[]
+  bankAccounts        BankAccount[]
+  journalEntries      JournalEntry[]
+  contraEntries       ContraEntry[]
+  taxRecords          TaxRecord[]
+  employees           Employee[]
+  payrollRuns         PayrollRun[]
+  reimbursements      Reimbursement[]
+  approvals           Approval[]
+  partyLedgerEntries  PartyLedgerEntry[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@map("branches")
+}
+
+model Role {
+  id   String @id @default(uuid()) @db.Uuid
+  code String @unique @db.VarChar(40)
+  name String @db.VarChar(80)
+
+  users       User[]
+  permissions RoleModulePermission[]
+
+  @@map("roles")
+}
+
+model AppModule {
+  id   String @id @default(uuid()) @db.Uuid
+  code String @unique @db.VarChar(60)
+  name String @db.VarChar(120)
+
+  permissions RoleModulePermission[]
+
+  @@map("modules")
+}
+
+model RoleModulePermission {
+  roleId   String          @map("role_id") @db.Uuid
+  moduleId String          @map("module_id") @db.Uuid
+  level    PermissionLevel
+
+  role   Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  module AppModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, moduleId])
+  @@map("role_module_permissions")
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique @db.Citext
+  passwordHash String    @map("password_hash")
+  fullName     String    @map("full_name") @db.VarChar(120)
+  phone        String?   @db.VarChar(40)
+  roleId       String    @map("role_id") @db.Uuid
+  /**
+   * Null reserved for platform CRM_ADMIN (MT2). Tenant users always set.
+   */
+  tenantId     String?   @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  /** Null for platform CRM_ADMIN (MT2). Tenant users always set. */
+  branchId     String?   @map("branch_id") @db.Uuid
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  role                    Role                   @relation(fields: [roleId], references: [id])
+  tenant                  Tenant?                @relation(fields: [tenantId], references: [id])
+  branch                  Branch?                @relation(fields: [branchId], references: [id])
+  refreshTokens           RefreshToken[]
+  branchAccess            UserBranchAccess[]
+  counselledStudents      Student[]              @relation("StudentCounsellor")
+  createdStudents         Student[]              @relation("StudentCreatedBy")
+  updatedStudents         Student[]              @relation("StudentUpdatedBy")
+  studentStatusChanges    StudentStatusHistory[]
+  createdInvoices         Invoice[]              @relation("InvoiceCreatedBy")
+  createdOtherInvoices    OtherInvoice[]         @relation("OtherInvoiceCreatedBy")
+  createdReceivables      Receivable[]           @relation("ReceivableCreatedBy")
+  createdSubAgentPays     SubAgentPayment[]      @relation("SubAgentPaymentCreatedBy")
+  createdPettyCash        PettyCashEntry[]       @relation("PettyCashCreatedBy")
+  requestedExpenses       Expense[]              @relation("ExpenseRequestedBy")
+  approvedExpenses        Expense[]              @relation("ExpenseApprovedBy")
+  createdJournalEntries   JournalEntry[]         @relation("JournalCreatedBy")
+  approvedJournalEntries  JournalEntry[]         @relation("JournalApprovedBy")
+  createdContraEntries    ContraEntry[]          @relation("ContraCreatedBy")
+  linkedEmployee          Employee?              @relation("EmployeeUser")
+  processedPayrollRuns    PayrollRun[]           @relation("PayrollProcessedBy")
+  requestedReimbursements Reimbursement[]        @relation("ReimbursementRequestedBy")
+  uploadedDocuments       Document[]
+  requestedApprovals      Approval[]             @relation("ApprovalRequestedBy")
+  decidedApprovals        Approval[]             @relation("ApprovalDecidedBy")
+  notifications           Notification[]
+  auditLogs               AuditLog[]
+  updatedSettings         SystemSetting[]
+
+  @@index([branchId])
+  @@index([roleId])
+  @@index([tenantId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  userAgent String?   @map("user_agent")
+  ip        String?   @db.VarChar(64)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model UserBranchAccess {
+  userId   String @map("user_id") @db.Uuid
+  branchId String @map("branch_id") @db.Uuid
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@id([userId, branchId])
+  @@map("user_branch_access")
+}
+
+// ─── Lookups / settings ───────────────────────────────────────────────────────
+
+model Currency {
+  code      String  @id @db.Char(3)
+  name      String  @db.VarChar(40)
+  symbol    String? @db.VarChar(8)
+  isEnabled Boolean @default(true) @map("is_enabled")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  fxRates               FxRate[]
+  universities          University[]
+  students              Student[]
+  invoices              Invoice[]
+  otherInvoices         OtherInvoice[]
+  receivables           Receivable[]
+  receivableAllocations ReceivableAllocation[]
+  subAgentCommissions   SubAgentCommission[]
+  subAgentPayments      SubAgentPayment[]
+  bankAccounts          BankAccount[]
+  bankTransactions      BankTransaction[]
+
+  @@map("currencies")
+}
+
+model FxRate {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  currencyCode  String   @map("currency_code") @db.Char(3)
+  rateToPkr     Decimal  @map("rate_to_pkr") @db.Decimal(18, 6)
+  effectiveDate DateTime @map("effective_date") @db.Date
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  currency Currency @relation(fields: [currencyCode], references: [code])
+
+  @@unique([tenantId, currencyCode, effectiveDate])
+  @@index([tenantId])
+  @@map("fx_rates")
+}
+
+model SystemSetting {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  key       String   @db.VarChar(80)
+  value     Json
+  updatedBy String?  @map("updated_by") @db.Uuid
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  updater User? @relation(fields: [updatedBy], references: [id])
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("system_settings")
+}
+
+/** Per-tenant outbound email (SMTP / OAuth). Secrets stored encrypted. */
+model TenantSmtpConfig {
+  id                   String       @id @default(uuid()) @db.Uuid
+  tenantId             String       @unique @map("tenant_id") @db.Uuid
+  provider             SmtpProvider @default(CUSTOM)
+  authMode             SmtpAuthMode @default(PASSWORD) @map("auth_mode")
+  fromEmail            String?      @map("from_email") @db.VarChar(200)
+  fromName             String?      @map("from_name") @db.VarChar(160)
+  host                 String?      @db.VarChar(200)
+  port                 Int?
+  secure               Boolean      @default(true)
+  username             String?      @db.VarChar(200)
+  /// AES-GCM ciphertext (base64); never returned raw to clients
+  passwordEnc          String?      @map("password_enc")
+  oauthAccessTokenEnc  String?      @map("oauth_access_token_enc")
+  oauthRefreshTokenEnc String?      @map("oauth_refresh_token_enc")
+  oauthExpiresAt       DateTime?    @map("oauth_expires_at")
+  oauthEmail           String?      @map("oauth_email") @db.VarChar(200)
+  connectedAt          DateTime?    @map("connected_at")
+  lastTestAt           DateTime?    @map("last_test_at")
+  lastTestOk           Boolean?     @map("last_test_ok")
+  lastError            String?      @map("last_error")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@map("tenant_smtp_configs")
+}
+
+model ExpenseCategory {
+  id          String  @id @default(uuid()) @db.Uuid
+  tenantId    String  @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  name        String  @db.VarChar(80)
+  glAccountId String? @map("gl_account_id") @db.Uuid
+  isActive    Boolean @default(true) @map("is_active")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  glAccount GlAccount? @relation(fields: [glAccountId], references: [id])
+  expenses  Expense[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("expense_categories")
+}
+
+model PettyCashCategory {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String  @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  name     String  @db.VarChar(80)
+  isActive Boolean @default(true) @map("is_active")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  entries PettyCashEntry[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("petty_cash_categories")
+}
+
+model PaymentMode {
+  code String @id @db.VarChar(30)
+
+  expenses Expense[]
+
+  @@map("payment_modes")
+}
+
+model Country {
+  code String @id @db.VarChar(2)
+  name String @unique @db.VarChar(80)
+
+  universities University[]
+
+  @@map("countries")
+}
+
+// ─── Masters ──────────────────────────────────────────────────────────────────
+
+model University {
+  id                    String    @id @default(uuid()) @db.Uuid
+  tenantId              String    @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  universityNo          String    @map("university_no") @db.VarChar(40)
+  name                  String    @db.VarChar(200)
+  countryCode           String?   @map("country_code") @db.VarChar(2)
+  countryName           String    @map("country_name") @db.VarChar(80)
+  defaultCommissionRate Decimal   @map("default_commission_rate") @db.Decimal(8, 4)
+  currencyCode          String    @map("currency_code") @db.Char(3)
+  isActive              Boolean   @default(true) @map("is_active")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  deletedAt             DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  country  Country?  @relation(fields: [countryCode], references: [code])
+  currency Currency  @relation(fields: [currencyCode], references: [code])
+  students Student[]
+  invoices Invoice[]
+
+  @@unique([tenantId, universityNo])
+  @@index([tenantId])
+  @@index([countryName])
+  @@map("universities")
+}
+
+model SubAgent {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  subAgentNo         String    @map("sub_agent_no") @db.VarChar(40)
+  name               String    @db.VarChar(160)
+  ntn                String?   @db.VarChar(40)
+  email              String?   @db.Citext
+  contact            String?   @db.VarChar(40)
+  accountTitle       String?   @map("account_title") @db.VarChar(160)
+  iban               String?   @db.VarChar(34)
+  accountNo          String?   @map("account_no") @db.VarChar(40)
+  defaultRatePercent Decimal?  @map("default_rate_percent") @db.Decimal(8, 4)
+  isActive           Boolean   @default(true) @map("is_active")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  deletedAt          DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  students    Student[]
+  commissions SubAgentCommission[]
+  payments    SubAgentPayment[]
+
+  @@unique([tenantId, subAgentNo])
+  @@index([tenantId])
+  @@map("sub_agents")
+}
+
+model Vendor {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  vendorNo  String    @map("vendor_no") @db.VarChar(40)
+  name      String    @db.VarChar(160)
+  ntn       String?   @db.VarChar(40)
+  contact   String?   @db.VarChar(40)
+  email     String?   @db.Citext
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  expenses Expense[]
+
+  @@unique([tenantId, vendorNo])
+  @@index([tenantId])
+  @@map("vendors")
+}
+
+// ─── Students / Master Sheet ──────────────────────────────────────────────────
+
+model Student {
+  id                     String            @id @default(uuid()) @db.Uuid
+  tenantId               String            @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  studentCode            String            @map("student_code") @db.VarChar(40)
+  fullName               String            @map("full_name") @db.VarChar(160)
+  cnicPassport           String            @map("cnic_passport") @db.VarChar(40)
+  contact                String?           @db.VarChar(40)
+  email                  String?           @db.Citext
+  branchId               String            @map("branch_id") @db.Uuid
+  counsellorId           String            @map("counsellor_id") @db.Uuid
+  country                String            @db.VarChar(80)
+  universityId           String            @map("university_id") @db.Uuid
+  course                 String            @db.VarChar(200)
+  intake                 String            @db.VarChar(40)
+  studentGroup           String?           @map("student_group") @db.VarChar(80)
+  applicationStatus      ApplicationStatus @map("application_status")
+  subAgentId             String?           @map("sub_agent_id") @db.Uuid
+  tuitionFee             Decimal           @map("tuition_fee") @db.Decimal(18, 2)
+  scholarship            Decimal           @default(0) @db.Decimal(18, 2)
+  expectedCommissionRate Decimal           @map("expected_commission_rate") @db.Decimal(8, 4)
+  currencyCode           String            @map("currency_code") @db.Char(3)
+  createdAt              DateTime          @default(now()) @map("created_at")
+  updatedAt              DateTime          @updatedAt @map("updated_at")
+  deletedAt              DateTime?         @map("deleted_at")
+  createdById            String?           @map("created_by") @db.Uuid
+  updatedById            String?           @map("updated_by") @db.Uuid
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch        Branch                 @relation(fields: [branchId], references: [id])
+  counsellor    User                   @relation("StudentCounsellor", fields: [counsellorId], references: [id])
+  university    University             @relation(fields: [universityId], references: [id])
+  subAgent      SubAgent?              @relation(fields: [subAgentId], references: [id])
+  currency      Currency               @relation(fields: [currencyCode], references: [code])
+  createdBy     User?                  @relation("StudentCreatedBy", fields: [createdById], references: [id])
+  updatedBy     User?                  @relation("StudentUpdatedBy", fields: [updatedById], references: [id])
+  statusHistory StudentStatusHistory[]
+  invoiceLines  InvoiceLine[]
+  commissions   SubAgentCommission[]
+
+  @@unique([tenantId, studentCode])
+  @@index([tenantId])
+  @@index([branchId, applicationStatus])
+  @@index([counsellorId])
+  @@index([universityId])
+  @@map("students")
+}
+
+model StudentStatusHistory {
+  id          String             @id @default(uuid()) @db.Uuid
+  studentId   String             @map("student_id") @db.Uuid
+  fromStatus  ApplicationStatus? @map("from_status")
+  toStatus    ApplicationStatus  @map("to_status")
+  changedById String?            @map("changed_by") @db.Uuid
+  changedAt   DateTime           @default(now()) @map("changed_at")
+  note        String?
+
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  changedBy User?   @relation(fields: [changedById], references: [id])
+
+  @@index([studentId, changedAt])
+  @@map("student_status_history")
+}
+
+// ─── Revenue ──────────────────────────────────────────────────────────────────
+
+model Invoice {
+  id           String        @id @default(uuid()) @db.Uuid
+  tenantId     String        @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  invoiceNo    String        @map("invoice_no") @db.VarChar(40)
+  branchId     String        @map("branch_id") @db.Uuid
+  universityId String?       @map("university_id") @db.Uuid
+  invoiceDate  DateTime      @map("invoice_date") @db.Date
+  poNumber     String?       @map("po_number") @db.VarChar(60)
+  currencyCode String        @map("currency_code") @db.Char(3)
+  status       InvoiceStatus @default(Draft)
+  exchangeRate Decimal?      @map("exchange_rate") @db.Decimal(18, 6)
+  notes        String?
+  sentAt       DateTime?     @map("sent_at")
+  closedAt     DateTime?     @map("closed_at")
+  createdById  String?       @map("created_by") @db.Uuid
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+  deletedAt    DateTime?     @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch      Branch                 @relation(fields: [branchId], references: [id])
+  university  University?            @relation(fields: [universityId], references: [id])
+  currency    Currency               @relation(fields: [currencyCode], references: [code])
+  createdBy   User?                  @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
+  lines       InvoiceLine[]
+  receivables Receivable[]
+  allocations ReceivableAllocation[]
+  commissions SubAgentCommission[]
+
+  @@unique([tenantId, invoiceNo])
+  @@index([tenantId])
+  @@index([branchId, status, invoiceDate])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id               String  @id @default(uuid()) @db.Uuid
+  invoiceId        String  @map("invoice_id") @db.Uuid
+  lineNo           Int     @map("line_no")
+  studentId        String  @map("student_id") @db.Uuid
+  tuitionFee       Decimal @map("tuition_fee") @db.Decimal(18, 2)
+  scholarship      Decimal @default(0) @db.Decimal(18, 2)
+  commissionRate   Decimal @map("commission_rate") @db.Decimal(8, 4)
+  bonus            Decimal @default(0) @db.Decimal(18, 2)
+  commissionAmount Decimal @map("commission_amount") @db.Decimal(18, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [id])
+
+  @@unique([invoiceId, lineNo])
+  @@unique([invoiceId, studentId])
+  @@index([studentId])
+  @@map("invoice_lines")
+}
+
+model OtherInvoice {
+  id           String             @id @default(uuid()) @db.Uuid
+  tenantId     String             @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  invoiceNo    String             @map("invoice_no") @db.VarChar(40)
+  branchId     String             @map("branch_id") @db.Uuid
+  invoiceDate  DateTime           @map("invoice_date") @db.Date
+  billTo       String             @map("bill_to") @db.VarChar(200)
+  category     String             @db.VarChar(80)
+  currencyCode String             @map("currency_code") @db.Char(3)
+  status       OtherInvoiceStatus @default(Draft)
+  notes        String?
+  createdById  String?            @map("created_by") @db.Uuid
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
+  deletedAt    DateTime?          @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch    Branch             @relation(fields: [branchId], references: [id])
+  currency  Currency           @relation(fields: [currencyCode], references: [code])
+  createdBy User?              @relation("OtherInvoiceCreatedBy", fields: [createdById], references: [id])
+  lines     OtherInvoiceLine[]
+
+  @@unique([tenantId, invoiceNo])
+  @@index([tenantId])
+  @@index([branchId, status, invoiceDate])
+  @@map("other_invoices")
+}
+
+model OtherInvoiceLine {
+  id             String  @id @default(uuid()) @db.Uuid
+  otherInvoiceId String  @map("other_invoice_id") @db.Uuid
+  lineNo         Int     @map("line_no")
+  description    String  @db.VarChar(300)
+  quantity       Decimal @db.Decimal(18, 4)
+  unitPrice      Decimal @map("unit_price") @db.Decimal(18, 2)
+  lineTotal      Decimal @map("line_total") @db.Decimal(18, 2)
+
+  otherInvoice OtherInvoice @relation(fields: [otherInvoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([otherInvoiceId, lineNo])
+  @@map("other_invoice_lines")
+}
+
+model BankAccount {
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String    @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  branchId       String    @map("branch_id") @db.Uuid
+  name           String    @db.VarChar(120)
+  bankName       String    @map("bank_name") @db.VarChar(120)
+  accountNo      String    @map("account_no") @db.VarChar(40)
+  currencyCode   String    @map("currency_code") @db.Char(3)
+  openingBalance Decimal   @default(0) @map("opening_balance") @db.Decimal(18, 2)
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch           Branch            @relation(fields: [branchId], references: [id])
+  currency         Currency          @relation(fields: [currencyCode], references: [code])
+  receivables      Receivable[]
+  subAgentPayments SubAgentPayment[]
+  expenses         Expense[]
+  transactions     BankTransaction[] @relation("BankTxnAccount")
+  counterpartyTxns BankTransaction[] @relation("BankTxnCounterparty")
+  cheques          Cheque[]
+  contraFrom       ContraEntry[]     @relation("ContraFromBank")
+  contraTo         ContraEntry[]     @relation("ContraToBank")
+
+  @@index([tenantId])
+  @@index([branchId])
+  @@map("bank_accounts")
+}
+
+model Receivable {
+  id                   String               @id @default(uuid()) @db.Uuid
+  tenantId             String               @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  receiptNo            String               @map("receipt_no") @db.VarChar(40)
+  branchId             String               @map("branch_id") @db.Uuid
+  invoiceId            String?              @map("invoice_id") @db.Uuid
+  bankAccountId        String               @map("bank_account_id") @db.Uuid
+  currencyCode         String               @map("currency_code") @db.Char(3)
+  amountReceived       Decimal              @map("amount_received") @db.Decimal(18, 2)
+  exchangeRate         Decimal              @map("exchange_rate") @db.Decimal(18, 6)
+  amountPkrGross       Decimal              @map("amount_pkr_gross") @db.Decimal(18, 2)
+  whtAmountPkr         Decimal              @default(0) @map("wht_amount_pkr") @db.Decimal(18, 2)
+  amountPkrNet         Decimal              @map("amount_pkr_net") @db.Decimal(18, 2)
+  receiptDate          DateTime             @map("receipt_date") @db.Date
+  reconciliationStatus ReconciliationStatus @default(Unmatched) @map("reconciliation_status")
+  isPartial            Boolean              @default(false) @map("is_partial")
+  isBulkRemittance     Boolean              @default(false) @map("is_bulk_remittance")
+  allocationStatus     AllocationStatus?    @map("allocation_status")
+  notes                String?
+  createdById          String?              @map("created_by") @db.Uuid
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch      Branch                 @relation(fields: [branchId], references: [id])
+  invoice     Invoice?               @relation(fields: [invoiceId], references: [id])
+  bankAccount BankAccount            @relation(fields: [bankAccountId], references: [id])
+  currency    Currency               @relation(fields: [currencyCode], references: [code])
+  createdBy   User?                  @relation("ReceivableCreatedBy", fields: [createdById], references: [id])
+  allocations ReceivableAllocation[]
+
+  @@unique([tenantId, receiptNo])
+  @@index([tenantId])
+  @@index([branchId, receiptDate])
+  @@map("receivables")
+}
+
+model ReceivableAllocation {
+  id                 String   @id @default(uuid()) @db.Uuid
+  receivableId       String   @map("receivable_id") @db.Uuid
+  invoiceId          String   @map("invoice_id") @db.Uuid
+  allocatedAmount    Decimal  @map("allocated_amount") @db.Decimal(18, 2)
+  currencyCode       String   @map("currency_code") @db.Char(3)
+  allocatedAmountPkr Decimal  @map("allocated_amount_pkr") @db.Decimal(18, 2)
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  receivable Receivable @relation(fields: [receivableId], references: [id], onDelete: Cascade)
+  invoice    Invoice    @relation(fields: [invoiceId], references: [id])
+  currency   Currency   @relation(fields: [currencyCode], references: [code])
+
+  @@unique([receivableId, invoiceId])
+  @@index([invoiceId])
+  @@map("receivable_allocations")
+}
+
+// ─── Sub-agents ───────────────────────────────────────────────────────────────
+
+model SubAgentCommission {
+  id              String                   @id @default(uuid()) @db.Uuid
+  tenantId        String                   @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  commissionNo    String                   @map("commission_no") @db.VarChar(40)
+  subAgentId      String                   @map("sub_agent_id") @db.Uuid
+  studentId       String                   @map("student_id") @db.Uuid
+  invoiceId       String                   @map("invoice_id") @db.Uuid
+  branchId        String                   @map("branch_id") @db.Uuid
+  grossFee        Decimal                  @map("gross_fee") @db.Decimal(18, 2)
+  rateGiven       Decimal                  @map("rate_given") @db.Decimal(8, 4)
+  exchangeRate    Decimal                  @map("exchange_rate") @db.Decimal(18, 6)
+  followOnBonus   Decimal                  @default(0) @map("follow_on_bonus") @db.Decimal(18, 2)
+  currencyCode    String                   @map("currency_code") @db.Char(3)
+  payablePkrGross Decimal                  @map("payable_pkr_gross") @db.Decimal(18, 2)
+  whtPkr          Decimal                  @default(0) @map("wht_pkr") @db.Decimal(18, 2)
+  payablePkrNet   Decimal                  @map("payable_pkr_net") @db.Decimal(18, 2)
+  status          SubAgentCommissionStatus @default(Pending)
+  createdAt       DateTime                 @default(now()) @map("created_at")
+  updatedAt       DateTime                 @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  subAgent SubAgent          @relation(fields: [subAgentId], references: [id])
+  student  Student           @relation(fields: [studentId], references: [id])
+  invoice  Invoice           @relation(fields: [invoiceId], references: [id])
+  branch   Branch            @relation(fields: [branchId], references: [id])
+  currency Currency          @relation(fields: [currencyCode], references: [code])
+  payments SubAgentPayment[]
+
+  @@unique([tenantId, commissionNo])
+  @@unique([studentId, invoiceId, subAgentId])
+  @@index([tenantId])
+  @@index([subAgentId, status])
+  @@map("sub_agent_commissions")
+}
+
+model SubAgentPayment {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  paymentNo     String   @map("payment_no") @db.VarChar(40)
+  commissionId  String   @map("commission_id") @db.Uuid
+  subAgentId    String   @map("sub_agent_id") @db.Uuid
+  bankAccountId String   @map("bank_account_id") @db.Uuid
+  chequeId      String?  @map("cheque_id") @db.Uuid
+  chequeNo      String?  @map("cheque_no") @db.VarChar(40)
+  amountPkr     Decimal  @map("amount_pkr") @db.Decimal(18, 2)
+  paymentDate   DateTime @map("payment_date") @db.Date
+  currencyCode  String   @default("PKR") @map("currency_code") @db.Char(3)
+  createdById   String?  @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  commission  SubAgentCommission @relation(fields: [commissionId], references: [id])
+  subAgent    SubAgent           @relation(fields: [subAgentId], references: [id])
+  bankAccount BankAccount        @relation(fields: [bankAccountId], references: [id])
+  cheque      Cheque?            @relation(fields: [chequeId], references: [id])
+  currency    Currency           @relation(fields: [currencyCode], references: [code])
+  createdBy   User?              @relation("SubAgentPaymentCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([tenantId, paymentNo])
+  @@index([tenantId])
+  @@index([commissionId])
+  @@map("sub_agent_payments")
+}
+
+// ─── Cash / expenses / bank ───────────────────────────────────────────────────
+
+model PettyCashEntry {
+  id          String             @id @default(uuid()) @db.Uuid
+  tenantId    String             @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  pettyCashNo String             @map("petty_cash_no") @db.VarChar(40)
+  branchId    String             @map("branch_id") @db.Uuid
+  entryDate   DateTime           @map("entry_date") @db.Date
+  categoryId  String             @map("category_id") @db.Uuid
+  description String
+  entryType   PettyCashEntryType @map("entry_type")
+  principal   Decimal            @db.Decimal(18, 2)
+  salesTax    Decimal            @default(0) @map("sales_tax") @db.Decimal(18, 2)
+  srbSst      Decimal            @default(0) @map("srb_sst") @db.Decimal(18, 2)
+  gst         Decimal            @default(0) @db.Decimal(18, 2)
+  incomeTax   Decimal            @default(0) @map("income_tax") @db.Decimal(18, 2)
+  total       Decimal            @db.Decimal(18, 2)
+  createdById String?            @map("created_by") @db.Uuid
+  createdAt   DateTime           @default(now()) @map("created_at")
+  updatedAt   DateTime           @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch    Branch            @relation(fields: [branchId], references: [id])
+  category  PettyCashCategory @relation(fields: [categoryId], references: [id])
+  createdBy User?             @relation("PettyCashCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([tenantId, pettyCashNo])
+  @@index([tenantId])
+  @@index([branchId, entryDate])
+  @@map("petty_cash_entries")
+}
+
+model Expense {
+  id              String         @id @default(uuid()) @db.Uuid
+  tenantId        String         @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  expenseNo       String         @map("expense_no") @db.VarChar(40)
+  branchId        String         @map("branch_id") @db.Uuid
+  vendorId        String?        @map("vendor_id") @db.Uuid
+  vendorName      String?        @map("vendor_name") @db.VarChar(160)
+  categoryId      String         @map("category_id") @db.Uuid
+  expenseDate     DateTime       @map("expense_date") @db.Date
+  principal       Decimal        @db.Decimal(18, 2)
+  salesTax        Decimal        @default(0) @map("sales_tax") @db.Decimal(18, 2)
+  srbSst          Decimal        @default(0) @map("srb_sst") @db.Decimal(18, 2)
+  gst             Decimal        @default(0) @db.Decimal(18, 2)
+  incomeTax       Decimal        @default(0) @map("income_tax") @db.Decimal(18, 2)
+  total           Decimal        @db.Decimal(18, 2)
+  paymentModeCode String         @map("payment_mode") @db.VarChar(30)
+  chequeId        String?        @map("cheque_id") @db.Uuid
+  bankAccountId   String?        @map("bank_account_id") @db.Uuid
+  approvalStatus  ApprovalStatus @default(Pending) @map("approval_status")
+  requestedById   String?        @map("requested_by") @db.Uuid
+  approvedById    String?        @map("approved_by") @db.Uuid
+  approvedAt      DateTime?      @map("approved_at")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch      Branch          @relation(fields: [branchId], references: [id])
+  vendor      Vendor?         @relation(fields: [vendorId], references: [id])
+  category    ExpenseCategory @relation(fields: [categoryId], references: [id])
+  paymentMode PaymentMode     @relation(fields: [paymentModeCode], references: [code])
+  cheque      Cheque?         @relation(fields: [chequeId], references: [id])
+  bankAccount BankAccount?    @relation(fields: [bankAccountId], references: [id])
+  requestedBy User?           @relation("ExpenseRequestedBy", fields: [requestedById], references: [id])
+  approvedBy  User?           @relation("ExpenseApprovedBy", fields: [approvedById], references: [id])
+
+  @@unique([tenantId, expenseNo])
+  @@index([tenantId])
+  @@index([branchId, approvalStatus, expenseDate])
+  @@map("expenses")
+}
+
+model BankTransaction {
+  id                        String               @id @default(uuid()) @db.Uuid
+  tenantId                  String               @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  bankAccountId             String               @map("bank_account_id") @db.Uuid
+  txnDate                   DateTime             @map("txn_date") @db.Date
+  txnType                   BankTransactionType  @map("txn_type")
+  description               String
+  amount                    Decimal              @db.Decimal(18, 2)
+  currencyCode              String               @map("currency_code") @db.Char(3)
+  counterpartyBankAccountId String?              @map("counterparty_bank_account_id") @db.Uuid
+  reconciliationStatus      ReconciliationStatus @default(Unmatched) @map("reconciliation_status")
+  sourceType                String?              @map("source_type") @db.VarChar(40)
+  sourceId                  String?              @map("source_id") @db.Uuid
+  createdAt                 DateTime             @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  bankAccount             BankAccount  @relation("BankTxnAccount", fields: [bankAccountId], references: [id])
+  counterpartyBankAccount BankAccount? @relation("BankTxnCounterparty", fields: [counterpartyBankAccountId], references: [id])
+  currency                Currency     @relation(fields: [currencyCode], references: [code])
+
+  @@index([tenantId])
+  @@index([bankAccountId, txnDate])
+  @@map("bank_transactions")
+}
+
+model Cheque {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  chequeNo      String       @map("cheque_no") @db.VarChar(40)
+  bankAccountId String       @map("bank_account_id") @db.Uuid
+  payee         String       @db.VarChar(160)
+  amount        Decimal      @db.Decimal(18, 2)
+  issueDate     DateTime     @map("issue_date") @db.Date
+  status        ChequeStatus @default(Issued)
+  clearedDate   DateTime?    @map("cleared_date") @db.Date
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  bankAccount      BankAccount       @relation(fields: [bankAccountId], references: [id])
+  subAgentPayments SubAgentPayment[]
+  expenses         Expense[]
+
+  @@unique([bankAccountId, chequeNo])
+  @@index([tenantId])
+  @@map("cheques")
+}
+
+model ContraEntry {
+  id                String          @id @default(uuid()) @db.Uuid
+  tenantId          String          @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  contraNo          String          @map("contra_no") @db.VarChar(40)
+  entryDate         DateTime        @map("entry_date") @db.Date
+  contraType        ContraEntryType @map("contra_type")
+  fromBankAccountId String?         @map("from_bank_account_id") @db.Uuid
+  toBankAccountId   String?         @map("to_bank_account_id") @db.Uuid
+  fromIsCash        Boolean         @default(false) @map("from_is_cash")
+  toIsCash          Boolean         @default(false) @map("to_is_cash")
+  amount            Decimal         @db.Decimal(18, 2)
+  branchId          String          @map("branch_id") @db.Uuid
+  journalEntryId    String?         @map("journal_entry_id") @db.Uuid
+  createdById       String?         @map("created_by") @db.Uuid
+  createdAt         DateTime        @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch          Branch        @relation(fields: [branchId], references: [id])
+  fromBankAccount BankAccount?  @relation("ContraFromBank", fields: [fromBankAccountId], references: [id])
+  toBankAccount   BankAccount?  @relation("ContraToBank", fields: [toBankAccountId], references: [id])
+  journalEntry    JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  createdBy       User?         @relation("ContraCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([tenantId, contraNo])
+  @@index([tenantId])
+  @@index([branchId, entryDate])
+  @@map("contra_entries")
+}
+
+// ─── Accounting ───────────────────────────────────────────────────────────────
+
+model GlAccount {
+  id          String        @id @default(uuid()) @db.Uuid
+  tenantId    String        @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  code        String        @db.VarChar(20)
+  name        String        @db.VarChar(120)
+  accountType GlAccountType @map("account_type")
+  parentId    String?       @map("parent_id") @db.Uuid
+  isPostable  Boolean       @default(true) @map("is_postable")
+  isActive    Boolean       @default(true) @map("is_active")
+  sortOrder   Int           @default(0) @map("sort_order")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  parent            GlAccount?        @relation("GlAccountTree", fields: [parentId], references: [id])
+  children          GlAccount[]       @relation("GlAccountTree")
+  journalLines      JournalLine[]
+  expenseCategories ExpenseCategory[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@map("gl_accounts")
+}
+
+model JournalEntry {
+  id             String             @id @default(uuid()) @db.Uuid
+  tenantId       String             @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  entryNo        String             @map("entry_no") @db.VarChar(40)
+  entryDate      DateTime           @map("entry_date") @db.Date
+  branchId       String             @map("branch_id") @db.Uuid
+  description    String
+  approvalStatus ApprovalStatus     @default(Pending) @map("approval_status")
+  sourceType     JournalSourceType? @map("source_type")
+  sourceId       String?            @map("source_id") @db.Uuid
+  isAutoPosted   Boolean            @default(false) @map("is_auto_posted")
+  postedAt       DateTime?          @map("posted_at")
+  createdById    String?            @map("created_by") @db.Uuid
+  approvedById   String?            @map("approved_by") @db.Uuid
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch             Branch             @relation(fields: [branchId], references: [id])
+  createdBy          User?              @relation("JournalCreatedBy", fields: [createdById], references: [id])
+  approvedBy         User?              @relation("JournalApprovedBy", fields: [approvedById], references: [id])
+  lines              JournalLine[]
+  contraEntries      ContraEntry[]
+  payrollRuns        PayrollRun[]
+  partyLedgerEntries PartyLedgerEntry[]
+
+  @@unique([tenantId, entryNo])
+  @@unique([sourceType, sourceId])
+  @@index([tenantId])
+  @@index([branchId, entryDate])
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id             String  @id @default(uuid()) @db.Uuid
+  journalEntryId String  @map("journal_entry_id") @db.Uuid
+  lineNo         Int     @map("line_no")
+  glAccountId    String  @map("gl_account_id") @db.Uuid
+  debit          Decimal @default(0) @db.Decimal(18, 2)
+  credit         Decimal @default(0) @db.Decimal(18, 2)
+  memo           String?
+
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  glAccount    GlAccount    @relation(fields: [glAccountId], references: [id])
+
+  @@unique([journalEntryId, lineNo])
+  @@index([glAccountId])
+  @@map("journal_lines")
+}
+
+model PartyLedgerEntry {
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String    @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  partyType      PartyType @map("party_type")
+  partyId        String    @map("party_id") @db.Uuid
+  entryDate      DateTime  @map("entry_date") @db.Date
+  description    String
+  debit          Decimal   @default(0) @db.Decimal(18, 2)
+  credit         Decimal   @default(0) @db.Decimal(18, 2)
+  reference      String?   @db.VarChar(80)
+  journalEntryId String?   @map("journal_entry_id") @db.Uuid
+  branchId       String    @map("branch_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  journalEntry JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  branch       Branch        @relation(fields: [branchId], references: [id])
+
+  @@index([tenantId])
+  @@index([partyType, partyId, entryDate])
+  @@index([branchId])
+  @@map("party_ledger_entries")
+}
+
+// ─── Tax ──────────────────────────────────────────────────────────────────────
+
+model TaxRecord {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  taxType    TaxType  @map("tax_type")
+  period     String   @db.Char(7)
+  branchId   String   @map("branch_id") @db.Uuid
+  amount     Decimal  @db.Decimal(18, 2)
+  sourceType String?  @map("source_type") @db.VarChar(40)
+  sourceId   String?  @map("source_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@unique([taxType, period, branchId, sourceType, sourceId])
+  @@index([tenantId])
+  @@index([branchId, period])
+  @@map("tax_records")
+}
+
+// ─── Payroll ──────────────────────────────────────────────────────────────────
+
+model Employee {
+  id          String    @id @default(uuid()) @db.Uuid
+  tenantId    String    @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  employeeNo  String    @map("employee_no") @db.VarChar(40)
+  userId      String?   @unique @map("user_id") @db.Uuid
+  fullName    String    @map("full_name") @db.VarChar(160)
+  branchId    String    @map("branch_id") @db.Uuid
+  designation String    @db.VarChar(80)
+  basicSalary Decimal   @map("basic_salary") @db.Decimal(18, 2)
+  allowances  Decimal   @default(0) @db.Decimal(18, 2)
+  email       String?   @db.Citext
+  bankAccount String?   @map("bank_account") @db.VarChar(60)
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  user           User?           @relation("EmployeeUser", fields: [userId], references: [id])
+  branch         Branch          @relation(fields: [branchId], references: [id])
+  payrollLines   PayrollLine[]
+  reimbursements Reimbursement[]
+
+  @@unique([tenantId, employeeNo])
+  @@index([tenantId])
+  @@index([branchId])
+  @@map("employees")
+}
+
+model PayrollRun {
+  id                  String           @id @default(uuid()) @db.Uuid
+  tenantId            String           @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  runNo               String           @map("run_no") @db.VarChar(40)
+  period              String           @db.Char(7)
+  branchId            String           @map("branch_id") @db.Uuid
+  status              PayrollRunStatus @default(Draft)
+  runDate             DateTime         @map("run_date") @db.Date
+  paidDate            DateTime?        @map("paid_date") @db.Date
+  source              PayrollSource    @default(Internal)
+  totalGross          Decimal          @default(0) @map("total_gross") @db.Decimal(18, 2)
+  totalTax            Decimal          @default(0) @map("total_tax") @db.Decimal(18, 2)
+  totalNet            Decimal          @default(0) @map("total_net") @db.Decimal(18, 2)
+  totalReimbursements Decimal          @default(0) @map("total_reimbursements") @db.Decimal(18, 2)
+  employeeCount       Int              @default(0) @map("employee_count")
+  processedById       String?          @map("processed_by") @db.Uuid
+  journalEntryId      String?          @map("journal_entry_id") @db.Uuid
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch         Branch          @relation(fields: [branchId], references: [id])
+  processedBy    User?           @relation("PayrollProcessedBy", fields: [processedById], references: [id])
+  journalEntry   JournalEntry?   @relation(fields: [journalEntryId], references: [id])
+  lines          PayrollLine[]
+  reimbursements Reimbursement[]
+
+  @@unique([tenantId, runNo])
+  @@unique([branchId, period, source])
+  @@index([tenantId])
+  @@index([branchId, period])
+  @@map("payroll_runs")
+}
+
+model PayrollLine {
+  id             String  @id @default(uuid()) @db.Uuid
+  payrollRunId   String  @map("payroll_run_id") @db.Uuid
+  employeeId     String  @map("employee_id") @db.Uuid
+  basicSalary    Decimal @map("basic_salary") @db.Decimal(18, 2)
+  allowances     Decimal @db.Decimal(18, 2)
+  grossSalary    Decimal @map("gross_salary") @db.Decimal(18, 2)
+  salaryTax      Decimal @map("salary_tax") @db.Decimal(18, 2)
+  netSalary      Decimal @map("net_salary") @db.Decimal(18, 2)
+  reimbursements Decimal @default(0) @db.Decimal(18, 2)
+  totalPayable   Decimal @map("total_payable") @db.Decimal(18, 2)
+
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employee   Employee   @relation(fields: [employeeId], references: [id])
+
+  @@unique([payrollRunId, employeeId])
+  @@map("payroll_lines")
+}
+
+model Reimbursement {
+  id                String            @id @default(uuid()) @db.Uuid
+  tenantId          String            @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  reimbursementNo   String            @map("reimbursement_no") @db.VarChar(40)
+  employeeId        String            @map("employee_id") @db.Uuid
+  branchId          String            @map("branch_id") @db.Uuid
+  reimbursementType ReimbursementType @map("reimbursement_type")
+  amount            Decimal           @db.Decimal(18, 2)
+  reimbursementDate DateTime          @map("reimbursement_date") @db.Date
+  status            ApprovalStatus    @default(Pending)
+  description       String?
+  requestedById     String?           @map("requested_by") @db.Uuid
+  payrollRunId      String?           @map("payroll_run_id") @db.Uuid
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  employee    Employee    @relation(fields: [employeeId], references: [id])
+  branch      Branch      @relation(fields: [branchId], references: [id])
+  requestedBy User?       @relation("ReimbursementRequestedBy", fields: [requestedById], references: [id])
+  payrollRun  PayrollRun? @relation(fields: [payrollRunId], references: [id])
+
+  @@unique([tenantId, reimbursementNo])
+  @@index([tenantId])
+  @@index([branchId, status])
+  @@map("reimbursements")
+}
+
+model SalaryTaxSlab {
+  id            String    @id @default(uuid()) @db.Uuid
+  minAnnual     Decimal   @map("min_annual") @db.Decimal(18, 2)
+  maxAnnual     Decimal?  @map("max_annual") @db.Decimal(18, 2)
+  ratePercent   Decimal   @map("rate_percent") @db.Decimal(8, 4)
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+
+  @@map("salary_tax_slabs")
+}
+
+// ─── Operations ───────────────────────────────────────────────────────────────
+
+model Document {
+  id           String       @id @default(uuid()) @db.Uuid
+  tenantId     String       @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  name         String       @db.VarChar(200)
+  docType      DocumentType @map("doc_type")
+  linkedType   String       @map("linked_type") @db.VarChar(40)
+  linkedId     String       @map("linked_id") @db.Uuid
+  storageKey   String       @map("storage_key")
+  mimeType     String?      @map("mime_type") @db.VarChar(100)
+  sizeBytes    BigInt?      @map("size_bytes")
+  uploadedById String?      @map("uploaded_by") @db.Uuid
+  uploadDate   DateTime     @default(now()) @map("upload_date")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  uploadedBy User? @relation(fields: [uploadedById], references: [id])
+
+  @@index([tenantId])
+  @@index([linkedType, linkedId])
+  @@map("documents")
+}
+
+model Approval {
+  id            String         @id @default(uuid()) @db.Uuid
+  tenantId      String         @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  approvalNo    String         @map("approval_no") @db.VarChar(40)
+  approvalType  ApprovalType   @map("approval_type")
+  title         String         @db.VarChar(200)
+  amount        Decimal        @default(0) @db.Decimal(18, 2)
+  branchId      String         @map("branch_id") @db.Uuid
+  requestedById String         @map("requested_by") @db.Uuid
+  requestDate   DateTime       @default(now()) @map("request_date") @db.Date
+  status        ApprovalStatus @default(Pending)
+  sourceType    String         @map("source_type") @db.VarChar(40)
+  sourceId      String         @map("source_id") @db.Uuid
+  decidedById   String?        @map("decided_by") @db.Uuid
+  decidedAt     DateTime?      @map("decided_at")
+  decisionNote  String?        @map("decision_note")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  branch      Branch @relation(fields: [branchId], references: [id])
+  requestedBy User   @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
+  decidedBy   User?  @relation("ApprovalDecidedBy", fields: [decidedById], references: [id])
+
+  @@unique([tenantId, approvalNo])
+  @@unique([sourceType, sourceId])
+  @@index([tenantId])
+  @@index([status, branchId])
+  @@map("approvals")
+}
+
+/** In-app notification per user (tenant-scoped). */
+model Notification {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  type       String    @db.VarChar(40)
+  title      String    @db.VarChar(200)
+  body       String?
+  link       String?   @db.VarChar(300)
+  entityType String?   @map("entity_type") @db.VarChar(60)
+  entityId   String?   @map("entity_id") @db.Uuid
+  readAt     DateTime? @map("read_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([tenantId, createdAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String      @id @default(uuid()) @db.Uuid
+  tenantId   String?     @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  userId     String?     @map("user_id") @db.Uuid
+  action     AuditAction
+  module     String      @db.VarChar(80)
+  entityType String?     @map("entity_type") @db.VarChar(80)
+  entityId   String?     @map("entity_id") @db.Uuid
+  beforeData Json?       @map("before_data")
+  afterData  Json?       @map("after_data")
+  ip         String?     @db.VarChar(64)
+  userAgent  String?     @map("user_agent")
+  createdAt  DateTime    @default(now()) @map("created_at")
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([tenantId])
+  @@index([createdAt])
+  @@index([module, userId])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
