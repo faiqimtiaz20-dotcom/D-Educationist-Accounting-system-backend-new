@@ -1811,8 +1811,8 @@ export class ReportsService {
           invoiceDate: inv.invoiceDate.toISOString().slice(0, 10),
           branchId: inv.branchId,
           branchName: inv.branch.name,
-          counsellorId: line.student.counsellorId,
-          counsellorName: line.student.counsellor.fullName,
+          counsellorId: line.student.counsellorId ?? '',
+          counsellorName: line.student.counsellor?.fullName ?? 'Unassigned',
           studentId: line.student.id,
           studentCode: line.student.studentCode,
           studentName: line.student.fullName,
@@ -1830,10 +1830,10 @@ export class ReportsService {
           status: inv.status,
         });
 
-        const cid = line.student.counsellorId;
+        const cid = line.student.counsellorId ?? 'unassigned';
         const agg = byCounsellor.get(cid) ?? {
           id: cid,
-          name: line.student.counsellor.fullName,
+          name: line.student.counsellor?.fullName ?? 'Unassigned',
           branchId: inv.branchId,
           branchName: inv.branch.name,
           invoiceCount: 0,

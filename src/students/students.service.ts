@@ -43,7 +43,10 @@ export class StudentsService {
     }
   }
 
-  private assertCounsellorAccess(user: AuthUserPayload, counsellorId: string) {
+  private assertCounsellorAccess(
+    user: AuthUserPayload,
+    counsellorId: string | null | undefined,
+  ) {
     if (this.isCounsellor(user) && counsellorId !== user.id) {
       throw new ForbiddenException('Counsellors may only access their own students');
     }
@@ -147,7 +150,7 @@ export class StudentsService {
     const branchId = resolveWritableBranchId(scope, dto.branchId);
     this.assertBranchAccess(scope, branchId);
 
-    let counsellorId = dto.counsellorId;
+    let counsellorId = dto.counsellorId || null;
     if (this.isCounsellor(user)) {
       counsellorId = user.id;
     }
@@ -238,7 +241,8 @@ export class StudentsService {
       throw new ForbiddenException('Cannot move student to another branch');
     }
 
-    let nextCounsellorId = dto.counsellorId ?? before.counsellorId;
+    let nextCounsellorId =
+      dto.counsellorId !== undefined ? dto.counsellorId || null : before.counsellorId;
     if (this.isCounsellor(user)) {
       if (dto.counsellorId && dto.counsellorId !== user.id) {
         throw new ForbiddenException('Counsellors cannot reassign students');
@@ -376,7 +380,7 @@ export class StudentsService {
 
   private async validateRefs(input: {
     branchId: string;
-    counsellorId: string;
+    counsellorId?: string | null;
     universityId: string;
     subAgentId?: string | null;
     currencyCode: string;
@@ -386,11 +390,13 @@ export class StudentsService {
     });
     if (!branch) throw new BadRequestException('Invalid branch');
 
-    const counsellor = await this.prisma.user.findFirst({
-      where: { id: input.counsellorId, deletedAt: null, isActive: true },
-      include: { role: true },
-    });
-    if (!counsellor) throw new BadRequestException('Invalid counsellor');
+    if (input.counsellorId) {
+      const counsellor = await this.prisma.user.findFirst({
+        where: { id: input.counsellorId, deletedAt: null, isActive: true },
+        include: { role: true },
+      });
+      if (!counsellor) throw new BadRequestException('Invalid counsellor');
+    }
 
     const university = await this.prisma.university.findFirst({
       where: { id: input.universityId, deletedAt: null, isActive: true },

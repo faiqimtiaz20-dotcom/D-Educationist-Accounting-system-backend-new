@@ -235,6 +235,7 @@ model Tenant {
   expenseCategories   ExpenseCategory[]
   pettyCashCategories PettyCashCategory[]
   universities        University[]
+  tenantCountries     TenantCountry[]
   subAgents           SubAgent[]
   vendors             Vendor[]
   students            Student[]
@@ -554,6 +555,24 @@ model Country {
   @@map("countries")
 }
 
+/** Per-tenant destination countries (Settings master — like universities). */
+model TenantCountry {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  name      String    @db.VarChar(80)
+  isoCode   String?   @map("iso_code") @db.VarChar(2)
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("tenant_countries")
+}
+
 // ─── Masters ──────────────────────────────────────────────────────────────────
 
 model University {
@@ -644,7 +663,7 @@ model Student {
   contact                String?           @db.VarChar(40)
   email                  String?           @db.Citext
   branchId               String            @map("branch_id") @db.Uuid
-  counsellorId           String            @map("counsellor_id") @db.Uuid
+  counsellorId           String?           @map("counsellor_id") @db.Uuid
   country                String            @db.VarChar(80)
   universityId           String            @map("university_id") @db.Uuid
   course                 String            @db.VarChar(200)
@@ -665,7 +684,7 @@ model Student {
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
   branch        Branch                 @relation(fields: [branchId], references: [id])
-  counsellor    User                   @relation("StudentCounsellor", fields: [counsellorId], references: [id])
+  counsellor    User?                  @relation("StudentCounsellor", fields: [counsellorId], references: [id])
   university    University             @relation(fields: [universityId], references: [id])
   subAgent      SubAgent?              @relation(fields: [subAgentId], references: [id])
   currency      Currency               @relation(fields: [currencyCode], references: [code])

@@ -17,12 +17,14 @@ import {
   CreateCategoryDto,
   CreateGlAccountDto,
   CreateSubAgentDto,
+  CreateTenantCountryDto,
   CreateUniversityDto,
   CreateVendorDto,
   UpdateBankAccountDto,
   UpdateCategoryDto,
   UpdateCurrencyDto,
   UpdateSubAgentDto,
+  UpdateTenantCountryDto,
   UpdateUniversityDto,
   UpdateVendorDto,
   UpsertFxRateDto,
@@ -84,6 +86,46 @@ export class MastersController {
     @CurrentUser() user: AuthUserPayload,
   ) {
     return this.masters.deleteUniversity(id, user.id);
+  }
+
+  // ── Destination countries (tenant Settings master) ────────────────────────
+
+  @Get('countries')
+  listCountries(@Query('includeInactive') includeInactive?: string) {
+    return this.masters.listTenantCountries(includeInactive === 'true');
+  }
+
+  @Get('countries/:id')
+  getCountry(@Param('id') id: string) {
+    return this.masters.getTenantCountry(id);
+  }
+
+  @Post('countries')
+  @RequirePermission(MODULE_CODES.SETTINGS, 'full')
+  createCountry(
+    @Body() dto: CreateTenantCountryDto,
+    @CurrentUser() user: AuthUserPayload,
+  ) {
+    return this.masters.createTenantCountry(dto, user.id);
+  }
+
+  @Patch('countries/:id')
+  @RequirePermission(MODULE_CODES.SETTINGS, 'full')
+  updateCountry(
+    @Param('id') id: string,
+    @Body() dto: UpdateTenantCountryDto,
+    @CurrentUser() user: AuthUserPayload,
+  ) {
+    return this.masters.updateTenantCountry(id, dto, user.id);
+  }
+
+  @Delete('countries/:id')
+  @RequirePermission(MODULE_CODES.SETTINGS, 'full')
+  deleteCountry(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUserPayload,
+  ) {
+    return this.masters.deleteTenantCountry(id, user.id);
   }
 
   // ── Sub-agents ────────────────────────────────────────────────────────────

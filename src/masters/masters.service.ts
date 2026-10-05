@@ -15,12 +15,14 @@ import {
   CreateCategoryDto,
   CreateGlAccountDto,
   CreateSubAgentDto,
+  CreateTenantCountryDto,
   CreateUniversityDto,
   CreateVendorDto,
   UpdateBankAccountDto,
   UpdateCategoryDto,
   UpdateCurrencyDto,
   UpdateSubAgentDto,
+  UpdateTenantCountryDto,
   UpdateUniversityDto,
   UpdateVendorDto,
   UpsertFxRateDto,
@@ -91,9 +93,13 @@ export class MastersService {
 
   async createUniversity(dto: CreateUniversityDto, actorId: string) {
     await this.ensureCurrency(dto.currencyCode);
-    const countryCode = await this.ensureCountry(
+    const tenantCountry = await this.resolveTenantCountry(
       dto.countryName.trim(),
       dto.countryCode,
+    );
+    const countryCode = await this.ensureCountry(
+      tenantCountry.name,
+      tenantCountry.isoCode ?? dto.countryCode,
     );
     const row = await this.prisma.$transaction(async (tx) => {
       const universityNo = await nextMasterNo(tx, {
@@ -105,7 +111,7 @@ export class MastersService {
         data: {
           universityNo,
           name: dto.name.trim(),
-          countryName: dto.countryName.trim(),
+          countryName: tenantCountry.name,
           countryCode,
           defaultCommissionRate: dto.defaultCommissionRate,
           currencyCode: dto.currencyCode.toUpperCase(),
@@ -127,21 +133,26 @@ export class MastersService {
   async updateUniversity(id: string, dto: UpdateUniversityDto, actorId: string) {
     const before = await this.getUniversity(id);
     if (dto.currencyCode) await this.ensureCurrency(dto.currencyCode);
-    let countryCode: string | null | undefined;
+    let countryName = before.countryName;
+    let countryCode: string | null | undefined = before.countryCode;
     if (dto.countryName !== undefined || dto.countryCode !== undefined) {
-      countryCode = await this.ensureCountry(
+      const tenantCountry = await this.resolveTenantCountry(
         (dto.countryName ?? before.countryName).trim(),
         dto.countryCode !== undefined ? dto.countryCode : before.countryCode,
+      );
+      countryName = tenantCountry.name;
+      countryCode = await this.ensureCountry(
+        tenantCountry.name,
+        tenantCountry.isoCode ?? dto.countryCode ?? before.countryCode,
       );
     }
     const row = await this.prisma.university.update({
       where: { id },
       data: {
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-        ...(dto.countryName !== undefined
-          ? { countryName: dto.countryName.trim() }
+        ...(dto.countryName !== undefined || dto.countryCode !== undefined
+          ? { countryName, countryCode }
           : {}),
-        ...(countryCode !== undefined ? { countryCode } : {}),
         ...(dto.defaultCommissionRate !== undefined
           ? { defaultCommissionRate: dto.defaultCommissionRate }
           : {}),
@@ -178,6 +189,174 @@ export class MastersService {
       beforeData: before as unknown as Prisma.InputJsonValue,
     });
     return { success: true };
+  }
+
+  // ── Tenant countries ──────────────────────────────────────────────────────
+
+  listTenantCountries(includeInactive = false) {
+    return this.prisma.tenantCountry.findMany({
+      where: {
+        deletedAt: null,
+        ...(includeInactive ? {} : { isActive: true }),
+      },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async getTenantCountry(id: string) {
+    const row = await this.prisma.tenantCountry.findFirst({
+      where: { id, deletedAt: null },
+    });
+    if (!row) throw new NotFoundException('Country not found');
+    return row;
+  }
+
+  async createTenantCountry(dto: CreateTenantCountryDto, actorId: string) {
+    const name = dto.name.trim();
+    const isoCode = dto.isoCode?.trim().toUpperCase() || null;
+    const clash = await this.prisma.tenantCountry.findFirst({
+      where: {
+        name: { equals: name, mode: 'insensitive' },
+        deletedAt: null,
+      },
+    });
+    if (clash) throw new ConflictException(`Country "${name}" already exists`);
+
+    if (isoCode) {
+      await this.ensureCountry(name, isoCode);
+    }
+
+    try {
+      const row = await this.prisma.tenantCountry.create({
+        data: {
+          name,
+          isoCode,
+          isActive: dto.isActive ?? true,
+        },
+      });
+      await this.audit.log({
+        userId: actorId,
+        action: 'CREATE',
+        module: 'Settings',
+        entityType: 'TenantCountry',
+        entityId: row.id,
+        afterData: row as unknown as Prisma.InputJsonValue,
+      });
+      return row;
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        throw new ConflictException(`Country "${name}" already exists`);
+      }
+      throw e;
+    }
+  }
+
+  async updateTenantCountry(
+    id: string,
+    dto: UpdateTenantCountryDto,
+    actorId: string,
+  ) {
+    const before = await this.getTenantCountry(id);
+    const name = dto.name !== undefined ? dto.name.trim() : before.name;
+    const isoCode =
+      dto.isoCode !== undefined
+        ? dto.isoCode?.trim().toUpperCase() || null
+        : before.isoCode;
+
+    if (dto.name !== undefined && name.toLowerCase() !== before.name.toLowerCase()) {
+      const clash = await this.prisma.tenantCountry.findFirst({
+        where: {
+          name: { equals: name, mode: 'insensitive' },
+          deletedAt: null,
+          NOT: { id },
+        },
+      });
+      if (clash) throw new ConflictException(`Country "${name}" already exists`);
+    }
+
+    if (isoCode) {
+      await this.ensureCountry(name, isoCode);
+    }
+
+    const row = await this.prisma.tenantCountry.update({
+      where: { id },
+      data: {
+        ...(dto.name !== undefined ? { name } : {}),
+        ...(dto.isoCode !== undefined ? { isoCode } : {}),
+        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+      },
+    });
+    await this.audit.log({
+      userId: actorId,
+      action: 'UPDATE',
+      module: 'Settings',
+      entityType: 'TenantCountry',
+      entityId: id,
+      beforeData: before as unknown as Prisma.InputJsonValue,
+      afterData: row as unknown as Prisma.InputJsonValue,
+    });
+    return row;
+  }
+
+  async deleteTenantCountry(id: string, actorId: string) {
+    const before = await this.getTenantCountry(id);
+    const inUse = await this.prisma.university.count({
+      where: {
+        deletedAt: null,
+        countryName: { equals: before.name, mode: 'insensitive' },
+      },
+    });
+    if (inUse > 0) {
+      throw new ConflictException(
+        `Cannot delete "${before.name}" — ${inUse} university(ies) still use it`,
+      );
+    }
+    await this.prisma.tenantCountry.update({
+      where: { id },
+      data: { deletedAt: new Date(), isActive: false },
+    });
+    await this.audit.log({
+      userId: actorId,
+      action: 'DELETE',
+      module: 'Settings',
+      entityType: 'TenantCountry',
+      entityId: id,
+      beforeData: before as unknown as Prisma.InputJsonValue,
+    });
+    return { success: true };
+  }
+
+  /** Require country from this tenant's registered list. */
+  private async resolveTenantCountry(
+    countryName: string,
+    countryCode?: string | null,
+  ) {
+    const name = countryName.trim();
+    let row = await this.prisma.tenantCountry.findFirst({
+      where: {
+        deletedAt: null,
+        isActive: true,
+        name: { equals: name, mode: 'insensitive' },
+      },
+    });
+    if (!row && countryCode) {
+      row = await this.prisma.tenantCountry.findFirst({
+        where: {
+          deletedAt: null,
+          isActive: true,
+          isoCode: countryCode.trim().toUpperCase(),
+        },
+      });
+    }
+    if (!row) {
+      throw new BadRequestException(
+        `Country "${name}" is not registered — add it under Settings → Countries first`,
+      );
+    }
+    return row;
   }
 
   // ── Sub-agents ────────────────────────────────────────────────────────────

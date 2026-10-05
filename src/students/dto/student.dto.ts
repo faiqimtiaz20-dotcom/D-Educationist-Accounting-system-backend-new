@@ -11,6 +11,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -42,8 +43,10 @@ export class CreateStudentDto {
   @IsUUID()
   branchId!: string;
 
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
   @IsUUID()
-  counsellorId!: string;
+  counsellorId?: string | null;
 
   @IsString()
   @MinLength(1)
@@ -129,8 +132,9 @@ export class UpdateStudentDto {
   branchId?: string;
 
   @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
   @IsUUID()
-  counsellorId?: string;
+  counsellorId?: string | null;
 
   @IsOptional()
   @IsString()

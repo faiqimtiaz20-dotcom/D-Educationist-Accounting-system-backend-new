@@ -10,6 +10,7 @@ export const TENANTED_PRISMA_MODELS = new Set([
   'ExpenseCategory',
   'PettyCashCategory',
   'University',
+  'TenantCountry',
   'SubAgent',
   'Vendor',
   'Student',

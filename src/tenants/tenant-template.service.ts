@@ -42,6 +42,16 @@ const DEFAULT_FX: Array<{ code: string; rate: number }> = [
   { code: 'EUR', rate: 300 },
 ];
 
+const DEFAULT_COUNTRIES: Array<{ name: string; isoCode: string }> = [
+  { name: 'UK', isoCode: 'GB' },
+  { name: 'USA', isoCode: 'US' },
+  { name: 'Canada', isoCode: 'CA' },
+  { name: 'Australia', isoCode: 'AU' },
+  { name: 'Germany', isoCode: 'DE' },
+  { name: 'Ireland', isoCode: 'IE' },
+  { name: 'New Zealand', isoCode: 'NZ' },
+];
+
 /**
  * Pure provisioner (usable from Nest + seed). Does **not** copy transactional
  * data from another tenant — only template masters/settings/COA/FX/categories.
@@ -54,6 +64,7 @@ export async function provisionTenantTemplate(
   settings: number;
   expenseCategories: number;
   pettyCategories: number;
+  countries: number;
   glAccounts: number;
   fxRates: number;
 }> {
@@ -128,6 +139,21 @@ export async function provisionTenantTemplate(
     pettyCategories += 1;
   }
 
+  let countries = 0;
+  for (const c of DEFAULT_COUNTRIES) {
+    await prisma.tenantCountry.upsert({
+      where: { tenantId_name: { tenantId, name: c.name } },
+      create: {
+        tenantId,
+        name: c.name,
+        isoCode: c.isoCode,
+        isActive: true,
+      },
+      update: { isActive: true, isoCode: c.isoCode },
+    });
+    countries += 1;
+  }
+
   const byCode = new Map<string, string>();
   let glAccounts = 0;
   for (const item of COA_SEED) {
@@ -186,6 +212,7 @@ export async function provisionTenantTemplate(
     settings: settingsN,
     expenseCategories,
     pettyCategories,
+    countries,
     glAccounts,
     fxRates,
   };
