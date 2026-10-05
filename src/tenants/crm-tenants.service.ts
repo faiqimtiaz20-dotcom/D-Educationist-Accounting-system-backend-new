@@ -20,6 +20,29 @@ import {
  * MT5 CRM tenant lifecycle.
  * Soft status only (D7) — no seat/plan numeric limits enforced in v1.
  */
+
+const CITY_BRANCH_CODES: Record<string, string> = {
+  karachi: 'KHI',
+  lahore: 'LHR',
+  islamabad: 'ISB',
+  rawalpindi: 'RWP',
+  multan: 'MUL',
+  faisalabad: 'FSD',
+  peshawar: 'PEW',
+  quetta: 'QTA',
+};
+
+function cityToBranchCode(city: string, reserved: Set<string>): string {
+  const key = city.trim().toLowerCase();
+  let code =
+    CITY_BRANCH_CODES[key] ??
+    city.replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase();
+  if (code.length < 2) code = 'MAIN';
+  if (reserved.has(code)) code = 'MAIN';
+  if (reserved.has(code)) code = 'BR1';
+  return code;
+}
+
 @Injectable()
 export class CrmTenantsService {
   constructor(
@@ -91,6 +114,15 @@ export class CrmTenantsService {
     const passwordHash = await bcrypt.hash(dto.adminPassword, 12);
     const status = dto.status ?? TenantStatus.Active;
     const orgName = (dto.orgName ?? dto.name).trim();
+    const city = (dto.branchCity ?? 'Karachi').trim();
+    const hoCode = 'HO';
+    const operatingCode =
+      branchCode !== hoCode
+        ? branchCode
+        : cityToBranchCode(city, new Set([hoCode]));
+    const operatingName = (
+      dto.branchName ?? `${city} Branch`
+    ).trim();
 
     const result = await this.prisma.$transaction(async (tx) => {
       const tenant = await tx.tenant.create({
@@ -101,13 +133,24 @@ export class CrmTenantsService {
         },
       });
 
-      const branch = await tx.branch.create({
+      const hoBranch = await tx.branch.create({
         data: {
           tenantId: tenant.id,
-          code: branchCode,
-          name: (dto.branchName ?? `${dto.name.trim()} Head Office`).trim(),
-          city: (dto.branchCity ?? 'Karachi').trim(),
+          code: hoCode,
+          name: 'Head Office',
+          city,
           isHeadOffice: true,
+          isActive: true,
+        },
+      });
+
+      const operatingBranch = await tx.branch.create({
+        data: {
+          tenantId: tenant.id,
+          code: operatingCode,
+          name: operatingName,
+          city,
+          isHeadOffice: false,
           isActive: true,
         },
       });
@@ -119,7 +162,7 @@ export class CrmTenantsService {
           passwordHash,
           roleId: role.id,
           tenantId: tenant.id,
-          branchId: branch.id,
+          branchId: hoBranch.id,
           isActive: true,
         },
         select: {
@@ -132,7 +175,7 @@ export class CrmTenantsService {
         },
       });
 
-      return { tenant, branch, admin };
+      return { tenant, branch: hoBranch, operatingBranch, admin };
     });
 
     await this.template.provision(result.tenant.id, {
@@ -154,6 +197,7 @@ export class CrmTenantsService {
         status: result.tenant.status,
         adminEmail: result.admin.email,
         branchCode: result.branch.code,
+        operatingBranchCode: result.operatingBranch.code,
         note: 'v1: no seat/plan numeric limits enforced (D7 status-only)',
       },
     });
@@ -161,6 +205,7 @@ export class CrmTenantsService {
     return {
       tenant: result.tenant,
       branch: result.branch,
+      operatingBranch: result.operatingBranch,
       admin: result.admin,
       limitsEnforced: false,
       limitsNote:
