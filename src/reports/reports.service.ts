@@ -448,8 +448,9 @@ export class ReportsService {
         approvedPKR: 0,
       };
       agg.expenseCount += 1;
-      agg.totalPKR = round2(agg.totalPKR + total);
+      // Totals used by P&L / profit reports = Approved only (pending listed in details)
       if (e.approvalStatus === ApprovalStatus.Approved) {
+        agg.totalPKR = round2(agg.totalPKR + total);
         agg.approvedPKR = round2(agg.approvedPKR + total);
       }
       byBranch.set(e.branchId, agg);
@@ -646,7 +647,19 @@ export class ReportsService {
       },
       include: {
         university: { select: { id: true, name: true, countryName: true, universityNo: true } },
-        lines: { select: { commissionAmount: true } },
+        lines: {
+          select: {
+            commissionAmount: true,
+            student: {
+              select: {
+                universityId: true,
+                university: {
+                  select: { id: true, name: true, countryName: true, universityNo: true },
+                },
+              },
+            },
+          },
+        },
         commissions: {
           select: { payablePkrNet: true, payablePkrGross: true },
         },
@@ -657,6 +670,7 @@ export class ReportsService {
       string,
       {
         universityId: string;
+        universityNo: string;
         university: string;
         country: string;
         incomePKR: number;
@@ -667,16 +681,18 @@ export class ReportsService {
     >();
 
     for (const inv of invoices) {
-      const key = inv.universityId ?? 'none';
+      const fromLine = inv.lines.find((l) => l.student?.university)?.student?.university;
+      const uni = inv.university ?? fromLine ?? null;
+      const key = inv.universityId ?? uni?.id ?? 'none';
       const earned = await this.invoiceEarnedPkr(inv);
       const cost = round2(
         inv.commissions.reduce((s, c) => s + Number(c.payablePkrGross), 0),
       );
       const row = byUni.get(key) ?? {
         universityId: key,
-        universityNo: inv.university?.universityNo ?? '—',
-        university: inv.university?.name ?? 'Unassigned',
-        country: inv.university?.countryName ?? '—',
+        universityNo: uni?.universityNo ?? '—',
+        university: uni?.name ?? 'Unassigned',
+        country: uni?.countryName ?? '—',
         incomePKR: 0,
         subAgentCostPKR: 0,
         profitPKR: 0,
@@ -844,28 +860,50 @@ export class ReportsService {
 
   private async consolidatedBs(scope: RequestBranchScope, query: ReportQuery) {
     const tb = await this.gl.trialBalance(scope, query.from, query.to);
-    const rows: ReportRow[] = tb.rows.map((r) => {
-      const isAsset = r.type === 'asset';
-      const isLiability = r.type === 'liability' || r.type === 'equity';
-      const isIncome = r.type === 'income';
-      const isExpense = r.type === 'expense';
-      let section = 'Other';
-      if (isAsset) section = 'Assets';
-      else if (isLiability) section = 'Liabilities & Equity';
-      else if (isIncome) section = 'Income (P&L)';
-      else if (isExpense) section = 'Expenses (P&L)';
-      const amount =
-        r.balanceDebit > 0 ? r.balanceDebit : -r.balanceCredit;
-      return {
-        code: r.code,
-        name: r.name,
-        type: r.type,
-        section,
-        amount: round2(amount),
-        debit: r.balanceDebit,
-        credit: r.balanceCredit,
-      };
-    });
+
+    // Period P&L → retained earnings (credit-normal equity)
+    let periodIncome = 0;
+    let periodExpense = 0;
+    for (const r of tb.rows) {
+      if (r.type === 'income') {
+        periodIncome = round2(periodIncome + r.balanceCredit - r.balanceDebit);
+      } else if (r.type === 'expense') {
+        periodExpense = round2(periodExpense + r.balanceDebit - r.balanceCredit);
+      }
+    }
+    const periodNetIncome = round2(periodIncome - periodExpense);
+
+    const rows: ReportRow[] = tb.rows
+      .filter((r) => r.type === 'asset' || r.type === 'liability' || r.type === 'equity')
+      .map((r) => {
+        let section = 'Other';
+        if (r.type === 'asset') section = 'Assets';
+        else if (r.type === 'liability') section = 'Liabilities';
+        else if (r.type === 'equity') section = 'Equity';
+        const amount =
+          r.balanceDebit > 0 ? r.balanceDebit : -r.balanceCredit;
+        return {
+          code: r.code,
+          name: r.name,
+          type: r.type,
+          section,
+          amount: round2(amount),
+          debit: r.balanceDebit,
+          credit: r.balanceCredit,
+        };
+      });
+
+    if (Math.abs(periodNetIncome) >= 0.01) {
+      rows.push({
+        code: '3900',
+        name: 'Retained Earnings (Period)',
+        type: 'equity',
+        section: 'Equity',
+        amount: round2(-periodNetIncome),
+        debit: periodNetIncome < 0 ? Math.abs(periodNetIncome) : 0,
+        credit: periodNetIncome > 0 ? periodNetIncome : 0,
+      });
+    }
 
     const assets = round2(
       rows
@@ -874,9 +912,15 @@ export class ReportsService {
     );
     const liabilities = round2(
       rows
-        .filter((r) => r.section === 'Liabilities & Equity')
+        .filter((r) => r.section === 'Liabilities')
         .reduce((s, r) => s + Math.abs(Number(r.amount)), 0),
     );
+    const equity = round2(
+      rows
+        .filter((r) => r.section === 'Equity')
+        .reduce((s, r) => s + Math.abs(Number(r.amount)), 0),
+    );
+    const liabilitiesEquity = round2(liabilities + equity);
 
     return {
       columns: [
@@ -890,9 +934,11 @@ export class ReportsService {
       rows,
       totals: {
         assets,
-        liabilitiesEquity: liabilities,
-        totalDebit: tb.totalDebit,
-        totalCredit: tb.totalCredit,
+        liabilities,
+        equity,
+        liabilitiesEquity,
+        periodNetIncome,
+        balanced: Math.abs(assets - liabilitiesEquity) < 0.02 ? 1 : 0,
       },
     };
   }

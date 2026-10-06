@@ -15,7 +15,8 @@ export const GL_CODES = {
   BANK: '1120',
   AR: '1200',
   WHT_RECEIVABLE: '1210',
-  REMITTANCE_CLEARING: '1220',
+  /** Liability clearing — coded in 2000 range (was mis-coded 1220 in early seeds). */
+  REMITTANCE_CLEARING: '2400',
   INPUT_TAX: '1310',
   AP: '2100',
   TAX_PAYABLE: '2200',
@@ -81,9 +82,15 @@ export class GlPostingService {
   }
 
   private async resolveAccountId(code: string, tx: Tx) {
-    const acc = await tx.glAccount.findUnique({
+    let acc = await tx.glAccount.findUnique({
       where: { tenantId_code: { tenantId: currentTenantId(), code } },
     });
+    // Legacy remittance clearing was mis-coded as 1220 (asset block)
+    if (!acc && code === GL_CODES.REMITTANCE_CLEARING) {
+      acc = await tx.glAccount.findUnique({
+        where: { tenantId_code: { tenantId: currentTenantId(), code: '1220' } },
+      });
+    }
     if (!acc) {
       throw new BadRequestException(
         `GL account ${code} missing — seed COA (M3) first`,

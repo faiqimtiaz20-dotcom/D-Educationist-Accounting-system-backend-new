@@ -1,7 +1,7 @@
-import { NotFoundException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { TenantContext } from '../common/tenant-context';
 import { isTenantedPrismaModel } from '../common/tenanted-models';
+import { NotFoundException } from '@nestjs/common';
 
 const FILTER_OPS = new Set([
   'findMany',
@@ -26,13 +26,6 @@ function injectCreateData(data: Record<string, unknown>, tenantId: string) {
     return { ...data, tenantId };
   }
   return data;
-}
-
-function modelDelegate(base: PrismaClient, model: string) {
-  const key = model.charAt(0).toLowerCase() + model.slice(1);
-  return (base as unknown as Record<string, { findFirst: (args: unknown) => Promise<{ id: string } | null> }>)[
-    key
-  ];
 }
 
 /**
@@ -102,19 +95,21 @@ export function createTenantExtendedPrisma() {
           }
 
           if (operation === 'update' || operation === 'delete') {
-            const where = a.where as { id?: string } | undefined;
-            if (where?.id) {
-              const delegate = modelDelegate(base, model);
-              if (delegate?.findFirst) {
-                const existing = await delegate.findFirst({
-                  where: { id: where.id, tenantId },
-                });
-                if (!existing) {
-                  throw new NotFoundException(`${model} not found`);
-                }
+            // Scope by tenant in WHERE — do NOT pre-read via base client (breaks
+            // interactive $transaction: uncommitted rows are invisible → false 404).
+            a.where = andWhere(a.where, tenantId);
+            try {
+              return await query(a);
+            } catch (err) {
+              const code =
+                err && typeof err === 'object' && 'code' in err
+                  ? String((err as { code?: string }).code)
+                  : '';
+              if (code === 'P2025') {
+                throw new NotFoundException(`${model} not found`);
               }
+              throw err;
             }
-            return query(a);
           }
 
           if (operation === 'upsert') {

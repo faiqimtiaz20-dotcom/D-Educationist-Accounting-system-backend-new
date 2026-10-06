@@ -77,14 +77,6 @@ export class DashboardService {
       _sum: { amountPkrGross: true },
     });
 
-    const monthlyRevenueAgg = await this.prisma.receivable.aggregate({
-      where: {
-        ...recWhere,
-        receiptDate: { gte: month.from, lt: month.to },
-      },
-      _sum: { amountPkrNet: true },
-    });
-
     const expWhere: Prisma.ExpenseWhereInput = {
       approvalStatus: ApprovalStatus.Approved,
       ...(branchId ? { branchId } : {}),
@@ -235,9 +227,30 @@ export class DashboardService {
       Number(todayCollectionAgg._sum.amountPkrGross ?? 0),
     );
     const todayExpenses = round2(Number(todayExpensesAgg._sum.total ?? 0));
-    const monthlyRevenue = round2(
-      Number(monthlyRevenueAgg._sum.amountPkrNet ?? 0),
-    );
+
+    // Accrued commission income (sent invoices this month) — aligns with GL 4100 / P&L
+    const monthInvoices = await this.prisma.invoice.findMany({
+      where: {
+        deletedAt: null,
+        status: { not: InvoiceStatus.Draft },
+        invoiceDate: { gte: month.from, lt: month.to },
+        ...(branchId ? { branchId } : {}),
+      },
+      include: { lines: { select: { commissionAmount: true } } },
+    });
+    let monthlyRevenue = 0;
+    for (const inv of monthInvoices) {
+      const fx =
+        inv.exchangeRate != null
+          ? Number(inv.exchangeRate)
+          : await this.fxToPkr(inv.currencyCode, inv.invoiceDate);
+      const totalFc = inv.lines.reduce(
+        (s, l) => s + Number(l.commissionAmount),
+        0,
+      );
+      monthlyRevenue = round2(monthlyRevenue + totalFc * fx);
+    }
+
     const monthlyExpenses = round2(
       Number(monthlyExpensesAgg._sum.total ?? 0),
     );

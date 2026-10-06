@@ -175,44 +175,107 @@ export class StudentsService {
 
     const status = dto.applicationStatus ?? ApplicationStatus.Applied;
 
+    // Reuse soft-deleted row with same code instead of unique-constraint 500
+    if (existing?.deletedAt) {
+      const revived = await this.prisma.$transaction(async (tx) => {
+        const student = await tx.student.update({
+          where: { id: existing.id },
+          data: {
+            deletedAt: null,
+            fullName: dto.fullName.trim(),
+            cnicPassport: dto.cnicPassport.trim(),
+            contact: dto.contact?.trim() || null,
+            email: dto.email?.trim() || null,
+            branchId,
+            counsellorId,
+            country: dto.country.trim(),
+            universityId: dto.universityId,
+            course: dto.course.trim(),
+            intake: dto.intake.trim(),
+            studentGroup: dto.studentGroup?.trim() || null,
+            applicationStatus: status,
+            subAgentId: dto.subAgentId || null,
+            tuitionFee: dto.tuitionFee,
+            scholarship: dto.scholarship ?? 0,
+            expectedCommissionRate: dto.expectedCommissionRate,
+            currencyCode: dto.currencyCode.toUpperCase(),
+            updatedById: user.id,
+            createdById: user.id,
+          },
+          include: studentInclude,
+        });
+        await tx.studentStatusHistory.create({
+          data: {
+            studentId: student.id,
+            fromStatus: null,
+            toStatus: status,
+            changedById: user.id,
+            note: 'Reactivated after soft-delete',
+          },
+        });
+        return student;
+      });
+      await this.audit.log({
+        userId: user.id,
+        action: 'CREATE',
+        module: 'Master Sheet',
+        entityType: 'Student',
+        entityId: revived.id,
+        afterData: revived as unknown as Prisma.InputJsonValue,
+      });
+      return revived;
+    }
+
     const row = await this.prisma.$transaction(async (tx) => {
-      const student = await tx.student.create({
-        data: {
-          studentCode: code,
-          fullName: dto.fullName.trim(),
-          cnicPassport: dto.cnicPassport.trim(),
-          contact: dto.contact?.trim() || null,
-          email: dto.email?.trim() || null,
-          branchId,
-          counsellorId,
-          country: dto.country.trim(),
-          universityId: dto.universityId,
-          course: dto.course.trim(),
-          intake: dto.intake.trim(),
-          studentGroup: dto.studentGroup?.trim() || null,
-          applicationStatus: status,
-          subAgentId: dto.subAgentId || null,
-          tuitionFee: dto.tuitionFee,
-          scholarship: dto.scholarship ?? 0,
-          expectedCommissionRate: dto.expectedCommissionRate,
-          currencyCode: dto.currencyCode.toUpperCase(),
-          createdById: user.id,
-          updatedById: user.id,
-        },
-        include: studentInclude,
-      });
+      try {
+        const student = await tx.student.create({
+          data: {
+            studentCode: code,
+            fullName: dto.fullName.trim(),
+            cnicPassport: dto.cnicPassport.trim(),
+            contact: dto.contact?.trim() || null,
+            email: dto.email?.trim() || null,
+            branchId,
+            counsellorId,
+            country: dto.country.trim(),
+            universityId: dto.universityId,
+            course: dto.course.trim(),
+            intake: dto.intake.trim(),
+            studentGroup: dto.studentGroup?.trim() || null,
+            applicationStatus: status,
+            subAgentId: dto.subAgentId || null,
+            tuitionFee: dto.tuitionFee,
+            scholarship: dto.scholarship ?? 0,
+            expectedCommissionRate: dto.expectedCommissionRate,
+            currencyCode: dto.currencyCode.toUpperCase(),
+            createdById: user.id,
+            updatedById: user.id,
+          },
+          include: studentInclude,
+        });
 
-      await tx.studentStatusHistory.create({
-        data: {
-          studentId: student.id,
-          fromStatus: null,
-          toStatus: status,
-          changedById: user.id,
-          note: 'Initial status',
-        },
-      });
+        await tx.studentStatusHistory.create({
+          data: {
+            studentId: student.id,
+            fromStatus: null,
+            toStatus: status,
+            changedById: user.id,
+            note: 'Initial status',
+          },
+        });
 
-      return student;
+        return student;
+      } catch (err) {
+        if (
+          err &&
+          typeof err === 'object' &&
+          'code' in err &&
+          String((err as { code?: string }).code) === 'P2002'
+        ) {
+          throw new ConflictException(`Student code ${code} already exists`);
+        }
+        throw err;
+      }
     });
 
     await this.audit.log({

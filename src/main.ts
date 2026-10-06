@@ -37,6 +37,9 @@ async function bootstrap() {
     httpsOptions ? { httpsOptions } : undefined,
   );
 
+  // Railway / reverse proxies — required for req.ip and X-Forwarded-For on audit LOGIN
+  app.set('trust proxy', 1);
+
   // Behind a TLS terminator (nginx/Cloudflare), set FORCE_HTTPS=true so plain HTTP is rejected.
   // Native HTTPS listen (HTTPS_KEY_PATH/CERT) already serves only TLS.
   if (process.env.FORCE_HTTPS === 'true') {

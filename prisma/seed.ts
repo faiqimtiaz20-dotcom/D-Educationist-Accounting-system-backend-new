@@ -1644,26 +1644,17 @@ async function main() {
   const slabCount = await prisma.salaryTaxSlab.count();
   if (slabCount === 0) {
     const from = new Date('2025-07-01');
+    // FBR salaried slabs TY 2026-27 (ratePercent = marginal %; fixed base is in code)
     await prisma.salaryTaxSlab.createMany({
       data: [
-        {
-          minAnnual: 0,
-          maxAnnual: 600000,
-          ratePercent: 2.5,
-          effectiveFrom: from,
-        },
-        {
-          minAnnual: 600000.01,
-          maxAnnual: 1200000,
-          ratePercent: 7.5,
-          effectiveFrom: from,
-        },
-        {
-          minAnnual: 1200000.01,
-          maxAnnual: null,
-          ratePercent: 12.5,
-          effectiveFrom: from,
-        },
+        { minAnnual: 0, maxAnnual: 600000, ratePercent: 0, effectiveFrom: from },
+        { minAnnual: 600000.01, maxAnnual: 1200000, ratePercent: 1, effectiveFrom: from },
+        { minAnnual: 1200000.01, maxAnnual: 2200000, ratePercent: 11, effectiveFrom: from },
+        { minAnnual: 2200000.01, maxAnnual: 3200000, ratePercent: 20, effectiveFrom: from },
+        { minAnnual: 3200000.01, maxAnnual: 4100000, ratePercent: 25, effectiveFrom: from },
+        { minAnnual: 4100000.01, maxAnnual: 5600000, ratePercent: 29, effectiveFrom: from },
+        { minAnnual: 5600000.01, maxAnnual: 7000000, ratePercent: 32, effectiveFrom: from },
+        { minAnnual: 7000000.01, maxAnnual: null, ratePercent: 35, effectiveFrom: from },
       ],
     });
   }

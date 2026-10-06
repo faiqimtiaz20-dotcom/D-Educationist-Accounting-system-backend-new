@@ -44,13 +44,13 @@ export const COA_SEED: Array<{
   { code: '1120', name: 'Bank Accounts', accountType: 'asset', parentCode: '1100', isPostable: true, sortOrder: 4 },
   { code: '1200', name: 'Accounts Receivable', accountType: 'asset', parentCode: '1000', isPostable: true, sortOrder: 5 },
   { code: '1210', name: 'WHT Receivable', accountType: 'asset', parentCode: '1000', isPostable: true, sortOrder: 6 },
-  { code: '1220', name: 'Unallocated Remittances', accountType: 'liability', parentCode: '2000', isPostable: true, sortOrder: 9 },
   { code: '1300', name: 'Prepaid Expenses', accountType: 'asset', parentCode: '1000', isPostable: true, sortOrder: 7 },
   { code: '1310', name: 'Input Tax Credit', accountType: 'asset', parentCode: '1000', isPostable: true, sortOrder: 8 },
   { code: '2000', name: 'Liabilities', accountType: 'liability', parentCode: null, isPostable: false, sortOrder: 10 },
   { code: '2100', name: 'Accounts Payable', accountType: 'liability', parentCode: '2000', isPostable: true, sortOrder: 11 },
   { code: '2200', name: 'Tax Payable', accountType: 'liability', parentCode: '2000', isPostable: true, sortOrder: 12 },
   { code: '2300', name: 'Salary Payable', accountType: 'liability', parentCode: '2000', isPostable: true, sortOrder: 13 },
+  { code: '2400', name: 'Unallocated Remittances', accountType: 'liability', parentCode: '2000', isPostable: true, sortOrder: 14 },
   { code: '3000', name: 'Equity', accountType: 'equity', parentCode: null, isPostable: true, sortOrder: 20 },
   { code: '4000', name: 'Revenue', accountType: 'income', parentCode: null, isPostable: false, sortOrder: 30 },
   { code: '4100', name: 'Commission Income', accountType: 'income', parentCode: '4000', isPostable: true, sortOrder: 31 },
@@ -985,6 +985,31 @@ export class MastersService {
   async seedChartOfAccounts(actorId?: string) {
     const tenantId = currentTenantId();
     const byCode = new Map<string, string>();
+
+    // Migrate legacy mis-coded liability 1220 → 2400 (asset-range code, liability type)
+    const legacy = await this.prisma.glAccount.findUnique({
+      where: { tenantId_code: { tenantId, code: '1220' } },
+    });
+    if (legacy) {
+      const already2400 = await this.prisma.glAccount.findUnique({
+        where: { tenantId_code: { tenantId, code: '2400' } },
+      });
+      if (!already2400) {
+        await this.prisma.glAccount.update({
+          where: { id: legacy.id },
+          data: {
+            code: '2400',
+            name: 'Unallocated Remittances',
+            accountType: 'liability',
+          },
+        });
+      } else if (legacy.id !== already2400.id) {
+        await this.prisma.glAccount.update({
+          where: { id: legacy.id },
+          data: { isActive: false, name: 'Unallocated Remittances (legacy 1220)' },
+        });
+      }
+    }
 
     for (const item of COA_SEED) {
       const parentId = item.parentCode
