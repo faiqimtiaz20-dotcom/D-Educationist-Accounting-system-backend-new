@@ -21,6 +21,25 @@ function andWhere(existing: unknown, tenantId: string) {
   return { AND: [existing, { tenantId }] };
 }
 
+/**
+ * update/delete require a *unique* where. Prisma accepts extended unique
+ * (`{ id, tenantId }`) but rejects `{ AND: [{ id }, { tenantId }] }` → 500.
+ */
+function scopeUniqueWhere(existing: unknown, tenantId: string) {
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+    return { tenantId };
+  }
+  const w = existing as Record<string, unknown>;
+  if ('AND' in w || 'OR' in w || 'NOT' in w) {
+    return { AND: [existing, { tenantId }] };
+  }
+  if (w.tenantId !== undefined && w.tenantId !== tenantId) {
+    // Force correct tenant — never allow cross-tenant unique match
+    return { ...w, tenantId };
+  }
+  return { ...w, tenantId };
+}
+
 function injectCreateData(data: Record<string, unknown>, tenantId: string) {
   if (data.tenantId === undefined || data.tenantId === null) {
     return { ...data, tenantId };
@@ -95,9 +114,10 @@ export function createTenantExtendedPrisma() {
           }
 
           if (operation === 'update' || operation === 'delete') {
-            // Scope by tenant in WHERE — do NOT pre-read via base client (breaks
-            // interactive $transaction: uncommitted rows are invisible → false 404).
-            a.where = andWhere(a.where, tenantId);
+            // Merge tenantId onto unique where (valid Prisma extended unique).
+            // Do NOT wrap as AND — that is not UserWhereUniqueInput and 500s.
+            // Do NOT pre-read via base client (breaks interactive $transaction).
+            a.where = scopeUniqueWhere(a.where, tenantId);
             try {
               return await query(a);
             } catch (err) {
@@ -113,6 +133,7 @@ export function createTenantExtendedPrisma() {
           }
 
           if (operation === 'upsert') {
+            a.where = scopeUniqueWhere(a.where, tenantId);
             a.create = injectCreateData(
               (a.create as Record<string, unknown>) || {},
               tenantId,

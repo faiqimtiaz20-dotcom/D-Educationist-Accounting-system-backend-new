@@ -532,6 +532,30 @@ export class MailService {
     return tokenJson.access_token;
   }
 
+  private async recordTestResult(
+    tenantId: string,
+    ok: boolean,
+    error?: string,
+  ) {
+    try {
+      // Prefer unique tenantId key (avoids fragile id+tenant compound where)
+      await this.prisma.tenantSmtpConfig.update({
+        where: { tenantId },
+        data: {
+          lastTestAt: new Date(),
+          lastTestOk: ok,
+          lastError: ok ? null : (error ?? 'Send failed').slice(0, 500),
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Failed to persist email test result: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
   private async buildTransport(tenantId?: string) {
     const tid = tenantId || currentTenantId();
     const row = await this.prisma.tenantSmtpConfig.findUnique({
@@ -550,22 +574,37 @@ export class MailService {
 
     if (row.authMode === 'OAUTH') {
       const accessToken = await this.refreshOauthIfNeeded(row);
-      const refreshToken = decryptSecret(this.config, row.oauthRefreshTokenEnc)!;
+      const refreshToken = decryptSecret(this.config, row.oauthRefreshTokenEnc);
+      if (!refreshToken) {
+        throw new BadRequestException(
+          'OAuth credentials cannot be decrypted — reconnect email (SMTP_SECRET may have changed)',
+        );
+      }
       if (row.provider === 'GMAIL') {
         const { clientId, clientSecret } = this.googleCreds();
+        if (!clientId || !clientSecret) {
+          throw new ServiceUnavailableException(
+            'Gmail OAuth is not configured on the server',
+          );
+        }
         transportOpts = {
           service: 'gmail',
           auth: {
             type: 'OAuth2',
             user: from,
-            clientId: clientId!,
-            clientSecret: clientSecret!,
+            clientId,
+            clientSecret,
             refreshToken,
             accessToken,
           },
         };
       } else {
         const { clientId, clientSecret } = this.msCreds();
+        if (!clientId || !clientSecret) {
+          throw new ServiceUnavailableException(
+            'Microsoft OAuth is not configured on the server',
+          );
+        }
         transportOpts = {
           host: row.host || 'smtp.office365.com',
           port: row.port || 587,
@@ -573,8 +612,8 @@ export class MailService {
           auth: {
             type: 'OAuth2',
             user: from,
-            clientId: clientId!,
-            clientSecret: clientSecret!,
+            clientId,
+            clientSecret,
             refreshToken,
             accessToken,
           },
@@ -582,9 +621,18 @@ export class MailService {
       }
     } else {
       const password = decryptSecret(this.config, row.passwordEnc);
-      if (!password) throw new BadRequestException('SMTP password missing');
+      if (!password) {
+        throw new BadRequestException(
+          'SMTP password missing or cannot be decrypted — re-save the password in Settings → Email (SMTP_SECRET may have changed)',
+        );
+      }
+      if (!row.host) {
+        throw new BadRequestException(
+          'SMTP host is missing — re-save email settings',
+        );
+      }
       transportOpts = {
-        host: row.host || undefined,
+        host: row.host,
         port: row.port || 587,
         secure: row.secure,
         auth: {
@@ -599,6 +647,7 @@ export class MailService {
       transporter,
       from: row.fromName ? `"${row.fromName}" <${from}>` : from,
       row,
+      tenantId: tid,
     };
   }
 
@@ -616,7 +665,9 @@ export class MailService {
       cid?: string;
     }>;
   }) {
-    const { transporter, from, row } = await this.buildTransport(input.tenantId);
+    const { transporter, from, tenantId } = await this.buildTransport(
+      input.tenantId,
+    );
     try {
       const info = await transporter.sendMail({
         from,
@@ -627,45 +678,59 @@ export class MailService {
         html: input.html,
         attachments: input.attachments,
       });
-      await this.prisma.tenantSmtpConfig.update({
-        where: { id: row.id },
-        data: {
-          lastTestAt: new Date(),
-          lastTestOk: true,
-          lastError: null,
-        },
-      });
+      await this.recordTestResult(tenantId, true);
       return { messageId: info.messageId, accepted: info.accepted };
     } catch (err) {
+      if (
+        err instanceof BadRequestException ||
+        err instanceof NotFoundException ||
+        err instanceof ServiceUnavailableException
+      ) {
+        throw err;
+      }
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`sendMail failed: ${message}`);
-      await this.prisma.tenantSmtpConfig.update({
-        where: { id: row.id },
-        data: {
-          lastTestAt: new Date(),
-          lastTestOk: false,
-          lastError: message.slice(0, 500),
-        },
-      });
+      await this.recordTestResult(tenantId, false, message);
       throw new BadRequestException(`Email send failed: ${message}`);
     }
   }
 
   async sendTest(dto: TestEmailDto, actorId: string) {
-    const result = await this.sendMail({
-      to: dto.to,
-      subject: dto.subject || 'Test email — D’ Educationist Accounting',
-      text:
-        dto.body ||
-        'This is a test message from your organisation SMTP / OAuth settings.',
-    });
-    await this.audit.log({
-      userId: actorId,
-      action: 'CREATE',
-      module: 'Settings',
-      entityType: 'TenantSmtpConfig',
-      afterData: { testTo: dto.to, messageId: result.messageId },
-    });
-    return { success: true, ...result, status: await this.getStatus() };
+    try {
+      const result = await this.sendMail({
+        to: dto.to,
+        subject: dto.subject || "Test email — D' Educationist Accounting",
+        text:
+          dto.body ||
+          'This is a test message from your organisation SMTP / OAuth settings.',
+      });
+      try {
+        await this.audit.log({
+          userId: actorId,
+          action: 'CREATE',
+          module: 'Settings',
+          entityType: 'TenantSmtpConfig',
+          afterData: { testTo: dto.to, messageId: result.messageId },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Audit log for email test failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      return { success: true, ...result, status: await this.getStatus() };
+    } catch (err) {
+      if (
+        err instanceof BadRequestException ||
+        err instanceof NotFoundException ||
+        err instanceof ServiceUnavailableException
+      ) {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`sendTest unexpected error: ${message}`);
+      throw new BadRequestException(`Email test failed: ${message}`);
+    }
   }
 }

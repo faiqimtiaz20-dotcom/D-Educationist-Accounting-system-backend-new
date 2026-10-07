@@ -223,18 +223,38 @@ export class UsersService {
       ? await bcrypt.hash(dto.password, 12)
       : undefined;
 
-    const user = await this.prisma.user.update({
-      where: { id },
-      data: {
-        ...(dto.email ? { email: dto.email.trim().toLowerCase() } : {}),
-        ...(dto.fullName ? { fullName: dto.fullName.trim() } : {}),
-        ...(role ? { roleId: role.id } : {}),
-        ...(dto.branchId ? { branchId: dto.branchId } : {}),
-        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
-        ...(passwordHash ? { passwordHash } : {}),
-      },
-      select: userSelect,
-    });
+    if (dto.email) {
+      const email = dto.email.trim().toLowerCase();
+      const clash = await this.prisma.user.findFirst({
+        where: { email, deletedAt: null, NOT: { id } },
+      });
+      if (clash) throw new ConflictException('Email already in use');
+    }
+
+    let user;
+    try {
+      user = await this.prisma.user.update({
+        where: { id },
+        data: {
+          ...(dto.email ? { email: dto.email.trim().toLowerCase() } : {}),
+          ...(dto.fullName ? { fullName: dto.fullName.trim() } : {}),
+          ...(role ? { roleId: role.id } : {}),
+          ...(dto.branchId ? { branchId: dto.branchId } : {}),
+          ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+          ...(passwordHash ? { passwordHash } : {}),
+        },
+        select: userSelect,
+      });
+    } catch (err) {
+      const code =
+        err && typeof err === 'object' && 'code' in err
+          ? String((err as { code?: string }).code)
+          : '';
+      if (code === 'P2002') {
+        throw new ConflictException('Email already in use');
+      }
+      throw err;
+    }
 
     if (dto.isActive === false) {
       await this.prisma.refreshToken.updateMany({
@@ -301,8 +321,8 @@ export class UsersService {
       module: 'Settings',
       entityType: 'User',
       entityId: id,
-      beforeData: before,
-      afterData: user,
+      beforeData: JSON.parse(JSON.stringify(before)) as object,
+      afterData: JSON.parse(JSON.stringify(user)) as object,
     });
 
     return user;

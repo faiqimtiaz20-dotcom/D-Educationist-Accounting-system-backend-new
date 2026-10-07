@@ -24,19 +24,28 @@ export function encryptSecret(config: ConfigService, plaintext: string): string 
   return Buffer.concat([iv, tag, enc]).toString('base64');
 }
 
+/**
+ * Decrypt payload. Returns null if missing/corrupt/wrong key
+ * (e.g. SMTP_SECRET rotated after password was saved) — never throws.
+ */
 export function decryptSecret(
   config: ConfigService,
   payload: string | null | undefined,
 ): string | null {
   if (!payload) return null;
-  const key = keyFromConfig(config);
-  const buf = Buffer.from(payload, 'base64');
-  const iv = buf.subarray(0, 12);
-  const tag = buf.subarray(12, 28);
-  const data = buf.subarray(28);
-  const decipher = createDecipheriv(ALGO, key, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(data), decipher.final()]).toString(
-    'utf8',
-  );
+  try {
+    const key = keyFromConfig(config);
+    const buf = Buffer.from(payload, 'base64');
+    if (buf.length < 28) return null;
+    const iv = buf.subarray(0, 12);
+    const tag = buf.subarray(12, 28);
+    const data = buf.subarray(28);
+    const decipher = createDecipheriv(ALGO, key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(data), decipher.final()]).toString(
+      'utf8',
+    );
+  } catch {
+    return null;
+  }
 }
