@@ -27,13 +27,17 @@ export class GlInquiryService {
     return scope.allBranches ? {} : { branchId: scope.branchId! };
   }
 
-  /** Only approved (incl. auto-posted) journals affect balances. */
+  /**
+   * JournalLine is not a tenanted model — nested journalEntry filters must
+   * always include tenantId or "All Branches" leaks other tenants' ledgers.
+   */
   private postedWhere(
     scope: RequestBranchScope,
     from?: string,
     to?: string,
   ): Prisma.JournalEntryWhereInput {
     return {
+      tenantId: currentTenantId(),
       ...this.branchFilter(scope),
       approvalStatus: ApprovalStatus.Approved,
       ...(from || to

@@ -123,6 +123,7 @@ export class DashboardService {
         where: {
           glAccountId: cashGl.id,
           journalEntry: {
+            tenantId: currentTenantId(),
             approvalStatus: ApprovalStatus.Approved,
             ...(branchId ? { branchId } : {}),
           },

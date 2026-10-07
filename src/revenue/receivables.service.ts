@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -129,6 +130,14 @@ export class ReceivablesService {
     });
     if (!bank) throw new BadRequestException('Invalid bank account');
 
+    const currencyCode = dto.currencyCode.toUpperCase();
+    const currency = await this.prisma.currency.findUnique({
+      where: { code: currencyCode },
+    });
+    if (!currency) {
+      throw new BadRequestException(`Unknown currency ${currencyCode}`);
+    }
+
     let invoiceNo: string | undefined;
     let arClearedPkr: number | undefined;
     if (!isBulk && dto.invoiceId) {
@@ -161,60 +170,99 @@ export class ReceivablesService {
           0.001
         : false);
 
-    const row = await this.prisma.$transaction(async (tx) => {
-      const receiptNo = await this.nextReceiptNo(tx);
-      const receivable = await tx.receivable.create({
-        data: {
-          receiptNo,
-          branchId,
-          invoiceId: isBulk ? null : dto.invoiceId!,
-          bankAccountId: dto.bankAccountId,
-          currencyCode: dto.currencyCode.toUpperCase(),
-          amountReceived: dto.amountReceived,
-          exchangeRate: dto.exchangeRate,
-          amountPkrGross: gross,
-          whtAmountPkr: wht,
-          amountPkrNet: net,
-          receiptDate,
-          reconciliationStatus:
-            dto.reconciliationStatus ?? ReconciliationStatus.Unmatched,
-          isPartial,
-          isBulkRemittance: isBulk,
-          allocationStatus: isBulk ? AllocationStatus.pending : null,
-          notes: dto.notes?.trim() || null,
-          createdById: user.id,
-        },
-        include,
+    let row;
+    try {
+      row = await this.prisma.$transaction(async (tx) => {
+        const receiptNo = await this.nextReceiptNo(tx);
+        const receivable = await tx.receivable.create({
+          data: {
+            receiptNo,
+            branchId,
+            invoiceId: isBulk ? null : dto.invoiceId!,
+            bankAccountId: dto.bankAccountId,
+            currencyCode,
+            amountReceived: dto.amountReceived,
+            exchangeRate: dto.exchangeRate,
+            amountPkrGross: gross,
+            whtAmountPkr: wht,
+            amountPkrNet: net,
+            receiptDate,
+            reconciliationStatus:
+              dto.reconciliationStatus ?? ReconciliationStatus.Unmatched,
+            isPartial,
+            isBulkRemittance: isBulk,
+            allocationStatus: isBulk ? AllocationStatus.pending : null,
+            notes: dto.notes?.trim() || null,
+            createdById: user.id,
+          },
+          include,
+        });
+
+        if (isBulk) {
+          await this.gl.postBulkRemittance(tx, {
+            receivableId: receivable.id,
+            receiptNo: receivable.receiptNo,
+            branchId,
+            entryDate: receiptDate,
+            grossPkr: gross,
+            whtPkr: wht,
+            netPkr: net,
+            actorId: user.id,
+          });
+        } else {
+          await this.gl.postReceivableReceipt(tx, {
+            receivableId: receivable.id,
+            receiptNo: receivable.receiptNo,
+            branchId,
+            entryDate: receiptDate,
+            invoiceNo,
+            grossPkr: gross,
+            whtPkr: wht,
+            netPkr: net,
+            arClearedPkr,
+            actorId: user.id,
+          });
+        }
+
+        // Mirror bank deposit (net of WHT) for cash position / reconciliation
+        await tx.bankTransaction.create({
+          data: {
+            bankAccountId: dto.bankAccountId,
+            txnDate: receiptDate,
+            txnType: 'deposit',
+            description: isBulk
+              ? `Bulk remittance ${receivable.receiptNo}`
+              : `University receipt ${receivable.receiptNo}${invoiceNo ? ` — ${invoiceNo}` : ''}`,
+            amount: net,
+            currencyCode: 'PKR',
+            reconciliationStatus: 'Unmatched',
+            sourceType: 'Receivable',
+            sourceId: receivable.id,
+          },
+        });
+
+        return receivable;
       });
-
-      if (isBulk) {
-        await this.gl.postBulkRemittance(tx, {
-          receivableId: receivable.id,
-          receiptNo: receivable.receiptNo,
-          branchId,
-          entryDate: receiptDate,
-          grossPkr: gross,
-          whtPkr: wht,
-          netPkr: net,
-          actorId: user.id,
-        });
-      } else {
-        await this.gl.postReceivableReceipt(tx, {
-          receivableId: receivable.id,
-          receiptNo: receivable.receiptNo,
-          branchId,
-          entryDate: receiptDate,
-          invoiceNo,
-          grossPkr: gross,
-          whtPkr: wht,
-          netPkr: net,
-          arClearedPkr,
-          actorId: user.id,
-        });
+    } catch (e) {
+      if (e instanceof HttpException) throw e;
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'Receipt number or journal already exists — retry',
+        );
       }
-
-      return receivable;
-    });
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2003'
+      ) {
+        throw new BadRequestException(
+          'Invalid reference (currency, bank, invoice, or branch)',
+        );
+      }
+      throw e;
+    }
 
     if (!isBulk && dto.invoiceId) {
       await this.syncInvoiceStatus(dto.invoiceId);

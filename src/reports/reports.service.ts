@@ -574,6 +574,7 @@ export class ReportsService {
           where: {
             glAccountId: cashGl.id,
             journalEntry: {
+              tenantId: currentTenantId(),
               approvalStatus: ApprovalStatus.Approved,
               branchId: b.id,
             },
@@ -1075,6 +1076,7 @@ export class ReportsService {
       where: {
         glAccountId: cashGl.id,
         journalEntry: {
+          tenantId: currentTenantId(),
           approvalStatus: ApprovalStatus.Approved,
           ...(branchId ? { branchId } : {}),
           ...(Object.keys(dateFilter).length

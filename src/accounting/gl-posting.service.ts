@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import {
   ApprovalStatus,
+  GlAccountType,
   JournalSourceType,
   Prisma,
 } from '@prisma/client';
@@ -29,6 +30,37 @@ export const GL_CODES = {
   PAYROLL: '5300',
   FX_LOSS: '5500',
 } as const;
+
+/** Minimal postable accounts created on demand if a tenant COA is incomplete. */
+const RUNTIME_COA_FALLBACK: Record<
+  string,
+  { name: string; accountType: GlAccountType; sortOrder: number }
+> = {
+  '1110': { name: 'Cash in Hand', accountType: 'asset', sortOrder: 3 },
+  '1120': { name: 'Bank Accounts', accountType: 'asset', sortOrder: 4 },
+  '1200': { name: 'Accounts Receivable', accountType: 'asset', sortOrder: 5 },
+  '1210': { name: 'WHT Receivable', accountType: 'asset', sortOrder: 6 },
+  '1310': { name: 'Input Tax Credit', accountType: 'asset', sortOrder: 8 },
+  '2100': { name: 'Accounts Payable', accountType: 'liability', sortOrder: 11 },
+  '2200': { name: 'Tax Payable', accountType: 'liability', sortOrder: 12 },
+  '2300': { name: 'Salary Payable', accountType: 'liability', sortOrder: 13 },
+  '2400': {
+    name: 'Unallocated Remittances',
+    accountType: 'liability',
+    sortOrder: 14,
+  },
+  '4100': { name: 'Commission Income', accountType: 'income', sortOrder: 31 },
+  '4200': { name: 'Other Income', accountType: 'income', sortOrder: 32 },
+  '4300': { name: 'FX Gain', accountType: 'income', sortOrder: 33 },
+  '5100': {
+    name: 'Sub-Agent Commission',
+    accountType: 'expense',
+    sortOrder: 41,
+  },
+  '5200': { name: 'Operating Expenses', accountType: 'expense', sortOrder: 42 },
+  '5300': { name: 'Payroll', accountType: 'expense', sortOrder: 43 },
+  '5500': { name: 'FX Loss', accountType: 'expense', sortOrder: 45 },
+};
 
 type Tx = Prisma.TransactionClient;
 
@@ -75,21 +107,47 @@ export class GlPostingService {
     sourceId: string,
     tx: Tx = this.prisma,
   ) {
-    const existing = await tx.journalEntry.findUnique({
-      where: { sourceType_sourceId: { sourceType, sourceId } },
+    // findFirst + tenantId avoids compound-unique quirks under the tenant extension
+    const existing = await tx.journalEntry.findFirst({
+      where: {
+        sourceType,
+        sourceId,
+        tenantId: currentTenantId(),
+      },
+      select: { id: true },
     });
     return Boolean(existing);
   }
 
   private async resolveAccountId(code: string, tx: Tx) {
+    const tenantId = currentTenantId();
     let acc = await tx.glAccount.findUnique({
-      where: { tenantId_code: { tenantId: currentTenantId(), code } },
+      where: { tenantId_code: { tenantId, code } },
     });
     // Legacy remittance clearing was mis-coded as 1220 (asset block)
     if (!acc && code === GL_CODES.REMITTANCE_CLEARING) {
       acc = await tx.glAccount.findUnique({
-        where: { tenantId_code: { tenantId: currentTenantId(), code: '1220' } },
+        where: { tenantId_code: { tenantId, code: '1220' } },
       });
+    }
+    // Auto-heal incomplete tenant COA for postable leaf accounts we need at runtime
+    if (!acc) {
+      const seed = RUNTIME_COA_FALLBACK[code];
+      if (seed) {
+        acc = await tx.glAccount.upsert({
+          where: { tenantId_code: { tenantId, code } },
+          create: {
+            tenantId,
+            code,
+            name: seed.name,
+            accountType: seed.accountType,
+            isPostable: true,
+            isActive: true,
+            sortOrder: seed.sortOrder,
+          },
+          update: { isActive: true, isPostable: true },
+        });
+      }
     }
     if (!acc) {
       throw new BadRequestException(

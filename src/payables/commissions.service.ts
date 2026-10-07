@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -110,6 +111,14 @@ export class CommissionsService {
       followOnBonus: dto.followOnBonus ?? 0,
     });
 
+    const currencyCode = dto.currencyCode.toUpperCase();
+    const currency = await this.prisma.currency.findUnique({
+      where: { code: currencyCode },
+    });
+    if (!currency) {
+      throw new BadRequestException(`Unknown currency ${currencyCode}`);
+    }
+
     try {
       const row = await this.prisma.$transaction(async (tx) => {
         const commissionNo = await nextBranchYearNo(tx, branchId, {
@@ -128,7 +137,7 @@ export class CommissionsService {
             rateGiven: dto.rateGiven,
             exchangeRate: dto.exchangeRate,
             followOnBonus: dto.followOnBonus ?? 0,
-            currencyCode: dto.currencyCode.toUpperCase(),
+            currencyCode,
             payablePkrGross: amounts.payablePkrGross,
             whtPkr: amounts.whtPkr,
             payablePkrNet: amounts.payablePkrNet,
@@ -162,12 +171,21 @@ export class CommissionsService {
       });
       return row;
     } catch (e) {
+      if (e instanceof HttpException) throw e;
       if (
         e instanceof Prisma.PrismaClientKnownRequestError &&
         e.code === 'P2002'
       ) {
         throw new ConflictException(
           'Commission already exists for this student + invoice + sub-agent',
+        );
+      }
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2003'
+      ) {
+        throw new BadRequestException(
+          'Invalid reference (sub-agent, student, invoice, branch, or currency)',
         );
       }
       throw e;
