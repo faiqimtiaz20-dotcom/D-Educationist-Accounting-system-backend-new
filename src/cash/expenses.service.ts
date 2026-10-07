@@ -183,6 +183,10 @@ export class ExpensesService {
           where: { id: bankAccountId, deletedAt: null, isActive: true },
         });
         if (!bank) throw new BadRequestException('Invalid bank account');
+      } else {
+        throw new BadRequestException(
+          'Select a bank account for bank, cheque, or online payments (create one under Bank & Cash)',
+        );
       }
     }
 
@@ -371,6 +375,11 @@ export class ExpensesService {
     await this.fiscal.assertNotLocked(before.expenseDate);
 
     const payFromCash = before.paymentModeCode === 'Cash';
+    if (!payFromCash && !before.bankAccountId) {
+      throw new BadRequestException(
+        'Cannot approve: expense is paid from bank but has no bank account. Edit the expense or add a bank account under Bank & Cash.',
+      );
+    }
     const whtPayable = round2(Number(before.incomeTax));
     const total = Number(before.total);
     const inputTax = round2(

@@ -1,8 +1,11 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import type { AuthUserPayload } from '../common/decorators';
+import { ROLE_CODES } from '../common/rbac';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { createReadStream, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
@@ -170,7 +173,11 @@ export class SettingsService {
     };
   }
 
-  async update(dto: UpdateSettingsDto, actorId: string) {
+  async update(dto: UpdateSettingsDto, actor: AuthUserPayload) {
+    if (actor.roleCode === ROLE_CODES.COUNSELLOR) {
+      throw new ForbiddenException('Counsellors cannot change tenant settings');
+    }
+    const actorId = actor.id;
     const tenantId = currentTenantId();
     const before = await this.getAll();
     const ops: Prisma.PrismaPromise<unknown>[] = [];

@@ -208,6 +208,7 @@ export class MastersController {
   // ── Bank accounts ─────────────────────────────────────────────────────────
 
   @Get('bank-accounts')
+  @RequirePermission(MODULE_CODES.BANK_CASH, 'read')
   listBankAccounts(
     @CurrentUser() user: AuthUserPayload,
     @Req() req: Request,
@@ -221,6 +222,7 @@ export class MastersController {
   }
 
   @Get('bank-accounts/:id')
+  @RequirePermission(MODULE_CODES.BANK_CASH, 'read')
   getBankAccount(
     @Param('id') id: string,
     @CurrentUser() user: AuthUserPayload,

@@ -1,5 +1,9 @@
 import 'dotenv/config';
+import dns from 'node:dns';
 import { existsSync, readFileSync } from 'fs';
+
+// Prefer IPv4 for all outbound DNS (Railway and similar PaaS often lack IPv6 egress)
+dns.setDefaultResultOrder('ipv4first');
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';

@@ -37,7 +37,7 @@ export class SettingsController {
     @Body() dto: UpdateSettingsDto,
     @CurrentUser() user: AuthUserPayload,
   ) {
-    return this.settings.update(dto, user.id);
+    return this.settings.update(dto, user);
   }
 
   @Post('invoice-logo')

@@ -23,7 +23,7 @@ npm run prisma:seed
 npm run start:dev
 ```
 
-Production: `npm run build` then `npm run start:prod`. See [../docs/DEPLOYMENT.md](../docs/DEPLOYMENT.md).
+Production: `npm run build` then `npm run start:prod` (auto-runs `prisma migrate deploy` — skips migrations already applied). See [../docs/DEPLOYMENT.md](../docs/DEPLOYMENT.md).
 
 ## Seed users
 

@@ -30,6 +30,7 @@ import {
   TestEmailDto,
   UpsertSmtpPasswordDto,
 } from './dto/mail.dto';
+import { preferIpv4Transport } from './smtp-ipv4';
 
 type OauthStatePayload = {
   purpose: 'smtp_oauth';
@@ -642,6 +643,7 @@ export class MailService {
       };
     }
 
+    transportOpts = await preferIpv4Transport(transportOpts);
     const transporter = nodemailer.createTransport(transportOpts);
     return {
       transporter,
@@ -649,6 +651,13 @@ export class MailService {
       row,
       tenantId: tid,
     };
+  }
+
+  private formatSendError(message: string): string {
+    if (/ENETUNREACH|EHOSTUNREACH/i.test(message) && /[a-f0-9:]{2,}/i.test(message)) {
+      return `${message} — the server tried IPv6 but this host (e.g. Railway) may only support outbound IPv4. Redeploy with the latest API build (SMTP_FORCE_IPV4) or use a relay that offers IPv4.`;
+    }
+    return message;
   }
 
   async sendMail(input: {
@@ -688,8 +697,9 @@ export class MailService {
       ) {
         throw err;
       }
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`sendMail failed: ${message}`);
+      const raw = err instanceof Error ? err.message : String(err);
+      const message = this.formatSendError(raw);
+      this.logger.warn(`sendMail failed: ${raw}`);
       await this.recordTestResult(tenantId, false, message);
       throw new BadRequestException(`Email send failed: ${message}`);
     }
