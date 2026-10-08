@@ -130,23 +130,27 @@ export class GlPostingService {
         where: { tenantId_code: { tenantId, code: '1220' } },
       });
     }
-    // Auto-heal incomplete tenant COA for postable leaf accounts we need at runtime
+    // Auto-heal incomplete tenant COA (create — avoid upsert unique-where pitfalls)
     if (!acc) {
       const seed = RUNTIME_COA_FALLBACK[code];
       if (seed) {
-        acc = await tx.glAccount.upsert({
-          where: { tenantId_code: { tenantId, code } },
-          create: {
-            tenantId,
-            code,
-            name: seed.name,
-            accountType: seed.accountType,
-            isPostable: true,
-            isActive: true,
-            sortOrder: seed.sortOrder,
-          },
-          update: { isActive: true, isPostable: true },
-        });
+        try {
+          acc = await tx.glAccount.create({
+            data: {
+              tenantId,
+              code,
+              name: seed.name,
+              accountType: seed.accountType,
+              isPostable: true,
+              isActive: true,
+              sortOrder: seed.sortOrder,
+            },
+          });
+        } catch {
+          acc = await tx.glAccount.findUnique({
+            where: { tenantId_code: { tenantId, code } },
+          });
+        }
       }
     }
     if (!acc) {
@@ -192,8 +196,10 @@ export class GlPostingService {
       actorId?: string;
     },
   ) {
-    if (input.amountPkr <= 0) {
-      throw new BadRequestException('Invoice accrual amount must be positive');
+    if (!Number.isFinite(input.amountPkr) || input.amountPkr <= 0) {
+      throw new BadRequestException(
+        `Invoice accrual amount must be a positive number (got ${input.amountPkr})`,
+      );
     }
     if (await this.alreadyPosted(JournalSourceType.Invoice, input.invoiceId, tx)) {
       return null;

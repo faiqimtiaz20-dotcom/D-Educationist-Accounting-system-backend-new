@@ -24,6 +24,7 @@ import {
   applyInvoiceTemplate,
   buildInvoiceHtml,
 } from '../settings/invoice-branding';
+import { rethrowPrismaAsHttp } from '../common/prisma-http';
 
 const invoiceInclude = {
   lines: {
@@ -299,71 +300,83 @@ export class InvoicesService {
               invoiceDate,
             );
 
-    const row = await this.prisma.$transaction(async (tx) => {
-      if (dto.lines) {
-        await tx.invoiceLine.deleteMany({ where: { invoiceId: id } });
-      }
+    const fxNum = Number(fx);
+    if (!Number.isFinite(fxNum) || fxNum <= 0) {
+      throw new BadRequestException(
+        'A valid exchange rate is required to send / post this invoice',
+      );
+    }
 
-      const invoice = await tx.invoice.update({
-        where: { id },
-        data: {
-          ...(dto.universityId !== undefined
-            ? { universityId: dto.universityId || null }
-            : {}),
-          invoiceDate,
-          ...(dto.poNumber !== undefined
-            ? { poNumber: dto.poNumber?.trim() || null }
-            : {}),
-          ...(dto.currencyCode
-            ? { currencyCode: dto.currencyCode.toUpperCase() }
-            : {}),
-          status: nextStatus,
-          exchangeRate: fx,
-          ...(dto.notes !== undefined
-            ? { notes: dto.notes?.trim() || null }
-            : {}),
-          ...(leavingDraft ? { sentAt: new Date() } : {}),
-          ...(nextStatus === InvoiceStatus.Closed
-            ? { closedAt: new Date() }
-            : {}),
-          ...(dto.lines
-            ? {
-                lines: {
-                  create: dto.lines.map((l, i) => ({
-                    lineNo: i + 1,
-                    studentId: l.studentId,
-                    tuitionFee: l.tuitionFee,
-                    scholarship: l.scholarship ?? 0,
-                    commissionRate: l.commissionRate,
-                    bonus: l.bonus ?? 0,
-                    commissionAmount: lineCommissionAmount(
-                      l.tuitionFee,
-                      l.scholarship ?? 0,
-                      l.commissionRate,
-                      l.bonus ?? 0,
-                    ),
-                  })),
-                },
-              }
-            : {}),
-        },
-        include: invoiceInclude,
-      });
+    let row;
+    try {
+      row = await this.prisma.$transaction(async (tx) => {
+        if (dto.lines) {
+          await tx.invoiceLine.deleteMany({ where: { invoiceId: id } });
+        }
 
-      if (leavingDraft) {
-        const total = this.invoiceTotal(invoice.lines);
-        await this.gl.postInvoiceAccrual(tx, {
-          invoiceId: invoice.id,
-          invoiceNo: invoice.invoiceNo,
-          branchId: invoice.branchId,
-          entryDate: invoiceDate,
-          amountPkr: round2(total * Number(fx)),
-          actorId: user.id,
+        const invoice = await tx.invoice.update({
+          where: { id },
+          data: {
+            ...(dto.universityId !== undefined
+              ? { universityId: dto.universityId || null }
+              : {}),
+            invoiceDate,
+            ...(dto.poNumber !== undefined
+              ? { poNumber: dto.poNumber?.trim() || null }
+              : {}),
+            ...(dto.currencyCode
+              ? { currencyCode: dto.currencyCode.toUpperCase() }
+              : {}),
+            status: nextStatus,
+            exchangeRate: fxNum,
+            ...(dto.notes !== undefined
+              ? { notes: dto.notes?.trim() || null }
+              : {}),
+            ...(leavingDraft ? { sentAt: new Date() } : {}),
+            ...(nextStatus === InvoiceStatus.Closed
+              ? { closedAt: new Date() }
+              : {}),
+            ...(dto.lines
+              ? {
+                  lines: {
+                    create: dto.lines.map((l, i) => ({
+                      lineNo: i + 1,
+                      studentId: l.studentId,
+                      tuitionFee: l.tuitionFee,
+                      scholarship: l.scholarship ?? 0,
+                      commissionRate: l.commissionRate,
+                      bonus: l.bonus ?? 0,
+                      commissionAmount: lineCommissionAmount(
+                        l.tuitionFee,
+                        l.scholarship ?? 0,
+                        l.commissionRate,
+                        l.bonus ?? 0,
+                      ),
+                    })),
+                  },
+                }
+              : {}),
+          },
+          include: invoiceInclude,
         });
-      }
 
-      return invoice;
-    });
+        if (leavingDraft) {
+          const total = this.invoiceTotal(invoice.lines);
+          await this.gl.postInvoiceAccrual(tx, {
+            invoiceId: invoice.id,
+            invoiceNo: invoice.invoiceNo,
+            branchId: invoice.branchId,
+            entryDate: invoiceDate,
+            amountPkr: round2(total * fxNum),
+            actorId: user.id,
+          });
+        }
+
+        return invoice;
+      });
+    } catch (e) {
+      rethrowPrismaAsHttp(e);
+    }
 
     await this.audit.log({
       userId: user.id,
@@ -389,7 +402,11 @@ export class InvoicesService {
     let row = before;
 
     if (before.status === InvoiceStatus.Draft) {
-      row = await this.update(id, { status: InvoiceStatus.Sent }, user, scope);
+      try {
+        row = await this.update(id, { status: InvoiceStatus.Sent }, user, scope);
+      } catch (e) {
+        rethrowPrismaAsHttp(e);
+      }
     }
 
     let emailSent = false;

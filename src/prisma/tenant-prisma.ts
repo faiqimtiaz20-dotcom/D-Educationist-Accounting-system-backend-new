@@ -22,22 +22,70 @@ function andWhere(existing: unknown, tenantId: string) {
 }
 
 /**
- * update/delete require a *unique* where. Prisma accepts extended unique
- * (`{ id, tenantId }`) but rejects `{ AND: [{ id }, { tenantId }] }` → 500.
+ * update / delete / upsert require a *unique* where.
+ *
+ * Prisma accepts extended unique `{ id, tenantId }` for PK lookups.
+ * It REJECTS:
+ * - `{ AND: [{ id }, { tenantId }] }`
+ * - compound unique + extra top-level fields, e.g.
+ *   `{ tenantId_code: {…}, tenantId }` or `{ sourceType_sourceId: {…}, tenantId }`
+ * Those validation failures surface as HTTP 500.
  */
 function scopeUniqueWhere(existing: unknown, tenantId: string) {
   if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
     return { tenantId };
   }
   const w = existing as Record<string, unknown>;
+
   if ('AND' in w || 'OR' in w || 'NOT' in w) {
+    const parts = Array.isArray(w.AND) ? w.AND : [];
+    for (const part of parts) {
+      if (
+        part &&
+        typeof part === 'object' &&
+        !Array.isArray(part) &&
+        'id' in part &&
+        typeof (part as { id: unknown }).id === 'string'
+      ) {
+        return { id: (part as { id: string }).id, tenantId };
+      }
+    }
+    // Unsafe fallback — prefer id extraction above
     return { AND: [existing, { tenantId }] };
   }
+
+  const keys = Object.keys(w);
+
+  // Already a tenant-scoped compound unique: tenantId_code, tenantId_key, …
+  if (keys.some((k) => k.startsWith('tenantId_'))) {
+    return w;
+  }
+
+  // Other compound uniques (sourceType_sourceId, bankAccountId_chequeNo, …)
+  // — do not append tenantId (invalid WhereUniqueInput).
+  if (keys.some((k) => k.includes('_'))) {
+    return w;
+  }
+
+  // Unique on tenantId alone (e.g. TenantSmtpConfig)
+  if (keys.length === 1 && keys[0] === 'tenantId') {
+    return { tenantId };
+  }
+
   if (w.tenantId !== undefined && w.tenantId !== tenantId) {
-    // Force correct tenant — never allow cross-tenant unique match
     return { ...w, tenantId };
   }
-  return { ...w, tenantId };
+  if (w.tenantId === tenantId) {
+    return w;
+  }
+
+  // Primary-key style — extend with tenantId for cross-tenant safety
+  if ('id' in w) {
+    return { id: w.id, tenantId };
+  }
+
+  // Globally unique fields (e.g. email) — leave unchanged
+  return w;
 }
 
 function injectCreateData(data: Record<string, unknown>, tenantId: string) {
@@ -114,9 +162,6 @@ export function createTenantExtendedPrisma() {
           }
 
           if (operation === 'update' || operation === 'delete') {
-            // Merge tenantId onto unique where (valid Prisma extended unique).
-            // Do NOT wrap as AND — that is not UserWhereUniqueInput and 500s.
-            // Do NOT pre-read via base client (breaks interactive $transaction).
             a.where = scopeUniqueWhere(a.where, tenantId);
             try {
               return await query(a);

@@ -1,11 +1,12 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import type { AuthUserPayload } from './decorators';
-import { isCrmAdminRole, isTenantAdminRole } from './rbac';
+import { canAccessAllTenantBranches, isCrmAdminRole } from './rbac';
 import type { RequestBranchScope } from './branch-scope.interceptor';
 
 /**
  * Resolves which branchId a query may use.
- * - Tenant Admin: optional `requested` (undefined = all branches / no filter)
+ * - Tenant Admin + HO Branch Manager / Accountant: optional `requested`
+ *   (undefined / `all` = all branches / no filter)
  * - Others: always forced to home branch; requesting another branch is forbidden
  * - CRM Admin: no branch scope (platform)
  */
@@ -19,7 +20,7 @@ export function resolveBranchScope(
     );
   }
 
-  if (isTenantAdminRole(user.roleCode)) {
+  if (canAccessAllTenantBranches(user.roleCode, user.branchIsHeadOffice)) {
     if (!requested || requested === 'all') {
       return { branchId: null, allBranches: true };
     }

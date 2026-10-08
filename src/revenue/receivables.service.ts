@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
-  HttpException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -24,6 +23,7 @@ import {
   ConfirmAllocationDto,
   CreateReceivableDto,
 } from './dto/revenue.dto';
+import { rethrowPrismaAsHttp } from '../common/prisma-http';
 
 const include = {
   invoice: { select: { id: true, invoiceNo: true, status: true, currencyCode: true } },
@@ -244,24 +244,7 @@ export class ReceivablesService {
         return receivable;
       });
     } catch (e) {
-      if (e instanceof HttpException) throw e;
-      if (
-        e instanceof Prisma.PrismaClientKnownRequestError &&
-        e.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          'Receipt number or journal already exists — retry',
-        );
-      }
-      if (
-        e instanceof Prisma.PrismaClientKnownRequestError &&
-        e.code === 'P2003'
-      ) {
-        throw new BadRequestException(
-          'Invalid reference (currency, bank, invoice, or branch)',
-        );
-      }
-      throw e;
+      rethrowPrismaAsHttp(e);
     }
 
     if (!isBulk && dto.invoiceId) {

@@ -386,6 +386,14 @@ export class MastersService {
   }
 
   async getSubAgent(id: string) {
+    // Guard non-UUID paths like GET /sub-agents/commissions (UI route, not API)
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        id,
+      )
+    ) {
+      throw new NotFoundException('Sub-agent not found');
+    }
     const row = await this.prisma.subAgent.findFirst({
       where: { id, deletedAt: null },
     });

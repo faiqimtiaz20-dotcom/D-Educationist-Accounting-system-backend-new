@@ -13,6 +13,7 @@ import type { RequestBranchScope } from '../common/branch-scope.interceptor';
 import {
   ROLE_CODES,
   assignableRoleCodes,
+  canAccessAllTenantBranches,
   canManageUsers,
   isTenantAdminRole,
 } from '../common/rbac';
@@ -121,7 +122,7 @@ export class UsersService {
     }
 
     if (
-      !isTenantAdminRole(actor.roleCode) &&
+      !canAccessAllTenantBranches(actor.roleCode, actor.branchIsHeadOffice) &&
       dto.branchId !== actor.branchId
     ) {
       throw new ForbiddenException('Cannot create users in another branch');
@@ -166,7 +167,11 @@ export class UsersService {
   }
 
   async update(id: string, dto: UpdateUserDto, actor: AuthUserPayload) {
-    const scope: RequestBranchScope = isTenantAdminRole(actor.roleCode)
+    const allBranches = canAccessAllTenantBranches(
+      actor.roleCode,
+      actor.branchIsHeadOffice,
+    );
+    const scope: RequestBranchScope = allBranches
       ? { branchId: null, allBranches: true }
       : { branchId: actor.branchId, allBranches: false };
     const before = await this.get(id, actor, scope);
@@ -186,7 +191,7 @@ export class UsersService {
 
     if (
       dto.branchId &&
-      !isTenantAdminRole(actor.roleCode) &&
+      !allBranches &&
       dto.branchId !== actor.branchId
     ) {
       throw new ForbiddenException('Cannot move user to another branch');
@@ -332,7 +337,10 @@ export class UsersService {
     if (id === actor.id) {
       throw new BadRequestException('Cannot delete your own account');
     }
-    const scope: RequestBranchScope = isTenantAdminRole(actor.roleCode)
+    const scope: RequestBranchScope = canAccessAllTenantBranches(
+      actor.roleCode,
+      actor.branchIsHeadOffice,
+    )
       ? { branchId: null, allBranches: true }
       : { branchId: actor.branchId, allBranches: false };
     const before = await this.get(id, actor, scope);

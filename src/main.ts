@@ -71,9 +71,10 @@ async function bootstrap() {
   );
 
   const port = Number(process.env.PORT ?? 3000);
-  await app.listen(port);
+  const host = process.env.HOST?.trim() || '0.0.0.0';
+  await app.listen(port, host);
   const scheme = httpsOptions ? 'https' : 'http';
   // eslint-disable-next-line no-console
-  console.log(`API listening on ${scheme}://localhost:${port}/api/v1`);
+  console.log(`API listening on ${scheme}://localhost:${port}/api/v1 (bound ${host})`);
 }
 bootstrap();

@@ -21,28 +21,6 @@ import {
  * Soft status only (D7) — no seat/plan numeric limits enforced in v1.
  */
 
-const CITY_BRANCH_CODES: Record<string, string> = {
-  karachi: 'KHI',
-  lahore: 'LHR',
-  islamabad: 'ISB',
-  rawalpindi: 'RWP',
-  multan: 'MUL',
-  faisalabad: 'FSD',
-  peshawar: 'PEW',
-  quetta: 'QTA',
-};
-
-function cityToBranchCode(city: string, reserved: Set<string>): string {
-  const key = city.trim().toLowerCase();
-  let code =
-    CITY_BRANCH_CODES[key] ??
-    city.replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase();
-  if (code.length < 2) code = 'MAIN';
-  if (reserved.has(code)) code = 'MAIN';
-  if (reserved.has(code)) code = 'BR1';
-  return code;
-}
-
 @Injectable()
 export class CrmTenantsService {
   constructor(
@@ -110,19 +88,13 @@ export class CrmTenantsService {
       throw new BadRequestException('TENANT_ADMIN role missing — run seed');
     }
 
-    const branchCode = (dto.branchCode ?? 'HO').trim().toUpperCase();
     const passwordHash = await bcrypt.hash(dto.adminPassword, 12);
     const status = dto.status ?? TenantStatus.Active;
     const orgName = (dto.orgName ?? dto.name).trim();
+    // Single branch: Head Office is also the operating branch (extra branches later via Settings)
+    const hoCode = (dto.branchCode ?? 'HO').trim().toUpperCase() || 'HO';
+    const hoName = (dto.branchName ?? 'Head Office').trim() || 'Head Office';
     const city = (dto.branchCity ?? 'Karachi').trim();
-    const hoCode = 'HO';
-    const operatingCode =
-      branchCode !== hoCode
-        ? branchCode
-        : cityToBranchCode(city, new Set([hoCode]));
-    const operatingName = (
-      dto.branchName ?? `${city} Branch`
-    ).trim();
 
     const result = await this.prisma.$transaction(async (tx) => {
       const tenant = await tx.tenant.create({
@@ -137,20 +109,9 @@ export class CrmTenantsService {
         data: {
           tenantId: tenant.id,
           code: hoCode,
-          name: 'Head Office',
+          name: hoName,
           city,
           isHeadOffice: true,
-          isActive: true,
-        },
-      });
-
-      const operatingBranch = await tx.branch.create({
-        data: {
-          tenantId: tenant.id,
-          code: operatingCode,
-          name: operatingName,
-          city,
-          isHeadOffice: false,
           isActive: true,
         },
       });
@@ -175,7 +136,7 @@ export class CrmTenantsService {
         },
       });
 
-      return { tenant, branch: hoBranch, operatingBranch, admin };
+      return { tenant, branch: hoBranch, admin };
     });
 
     await this.template.provision(result.tenant.id, {
@@ -197,15 +158,13 @@ export class CrmTenantsService {
         status: result.tenant.status,
         adminEmail: result.admin.email,
         branchCode: result.branch.code,
-        operatingBranchCode: result.operatingBranch.code,
-        note: 'v1: no seat/plan numeric limits enforced (D7 status-only)',
+        note: 'Single Head Office branch (also operative); no seat/plan limits (D7)',
       },
     });
 
     return {
       tenant: result.tenant,
       branch: result.branch,
-      operatingBranch: result.operatingBranch,
       admin: result.admin,
       limitsEnforced: false,
       limitsNote:

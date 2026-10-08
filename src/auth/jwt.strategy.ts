@@ -4,7 +4,11 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUserPayload } from '../common/decorators';
-import { isCrmAdminRole, isTenantAdminRole } from '../common/rbac';
+import {
+  canAccessAllTenantBranches,
+  isCrmAdminRole,
+  isTenantAdminRole,
+} from '../common/rbac';
 import { TenantContext } from '../common/tenant-context';
 
 type JwtPayload = {
@@ -59,6 +63,12 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       TenantContext.enter({ tenantId: user.tenantId, isPlatform: false });
     }
 
+    const branchIsHeadOffice = Boolean(user.branch?.isHeadOffice);
+    const canViewAllBranches = canAccessAllTenantBranches(
+      user.role.code,
+      branchIsHeadOffice,
+    );
+
     return {
       id: user.id,
       email: user.email,
@@ -69,7 +79,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       tenantId: user.tenantId,
       branchId: user.branchId,
       branchCode: user.branch?.code ?? null,
+      branchIsHeadOffice,
       isSuperAdmin: isTenantAdminRole(user.role.code),
+      canViewAllBranches,
       isCrmAdmin: isCrmAdminRole(user.role.code),
     };
   }

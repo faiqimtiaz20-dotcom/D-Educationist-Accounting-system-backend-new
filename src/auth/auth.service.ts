@@ -10,7 +10,11 @@ import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { isCrmAdminRole, isTenantAdminRole } from '../common/rbac';
+import {
+  canAccessAllTenantBranches,
+  isCrmAdminRole,
+  isTenantAdminRole,
+} from '../common/rbac';
 import {
   ChangePasswordDto,
   LoginDto,
@@ -51,7 +55,13 @@ export class AuthService {
     tenantId: string | null;
     branchId: string | null;
     role: { id: string; code: string; name: string };
-    branch: { id: string; code: string; name: string; city: string } | null;
+    branch: {
+      id: string;
+      code: string;
+      name: string;
+      city: string;
+      isHeadOffice?: boolean;
+    } | null;
     tenant?: {
       id: string;
       code: string;
@@ -59,6 +69,11 @@ export class AuthService {
       status: string;
     } | null;
   }) {
+    const branchIsHeadOffice = Boolean(user.branch?.isHeadOffice);
+    const canViewAllBranches = canAccessAllTenantBranches(
+      user.role.code,
+      branchIsHeadOffice,
+    );
     return {
       id: user.id,
       email: user.email,
@@ -74,7 +89,9 @@ export class AuthService {
       branchId: user.branchId,
       branchCode: user.branch?.code ?? null,
       branchName: user.branch?.name ?? null,
+      branchIsHeadOffice,
       isSuperAdmin: isTenantAdminRole(user.role.code),
+      canViewAllBranches,
       isCrmAdmin: isCrmAdminRole(user.role.code),
     };
   }

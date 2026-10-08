@@ -17,8 +17,15 @@ export type AuthUserPayload = {
   /** Null for platform CRM_ADMIN. */
   branchId: string | null;
   branchCode: string | null;
-  /** True for TENANT_ADMIN / legacy SUPER_ADMIN (all branches within tenant). */
+  /** True when the user's home branch is Head Office. */
+  branchIsHeadOffice: boolean;
+  /**
+   * True for TENANT_ADMIN / legacy SUPER_ADMIN, or Head Office
+   * BRANCH_MANAGER / ACCOUNTANT (all branches within tenant).
+   */
   isSuperAdmin: boolean;
+  /** Same as isSuperAdmin for branch data scope (explicit name for clients). */
+  canViewAllBranches: boolean;
   isCrmAdmin: boolean;
 };
 

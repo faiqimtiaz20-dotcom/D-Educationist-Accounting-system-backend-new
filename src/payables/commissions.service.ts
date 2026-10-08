@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
-  HttpException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -15,6 +14,7 @@ import type { RequestBranchScope } from '../common/branch-scope.interceptor';
 import { resolveWritableBranchId } from '../common/branch-scope';
 import { CreateCommissionDto, UpdateCommissionDto } from './dto/payables.dto';
 import { nextBranchYearNo } from '../common/document-numbers';
+import { rethrowPrismaAsHttp } from '../common/prisma-http';
 
 const include = {
   subAgent: { select: { id: true, name: true } },
@@ -171,7 +171,6 @@ export class CommissionsService {
       });
       return row;
     } catch (e) {
-      if (e instanceof HttpException) throw e;
       if (
         e instanceof Prisma.PrismaClientKnownRequestError &&
         e.code === 'P2002'
@@ -180,15 +179,7 @@ export class CommissionsService {
           'Commission already exists for this student + invoice + sub-agent',
         );
       }
-      if (
-        e instanceof Prisma.PrismaClientKnownRequestError &&
-        e.code === 'P2003'
-      ) {
-        throw new BadRequestException(
-          'Invalid reference (sub-agent, student, invoice, branch, or currency)',
-        );
-      }
-      throw e;
+      rethrowPrismaAsHttp(e);
     }
   }
 

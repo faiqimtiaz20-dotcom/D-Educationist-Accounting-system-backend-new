@@ -53,6 +53,26 @@ export function isTenantAdminRole(roleCode: string) {
   );
 }
 
+/**
+ * Head Office Branch Manager / Accountant may view & write across all
+ * branches in their tenant (same data scope as Tenant Admin for branch filters).
+ */
+export function isHeadOfficeAllBranchesRole(roleCode: string) {
+  return (
+    roleCode === ROLE_CODES.BRANCH_MANAGER ||
+    roleCode === ROLE_CODES.ACCOUNTANT
+  );
+}
+
+/** Tenant Admin, or HO-assigned BM/Accountant. Never cross-tenant. */
+export function canAccessAllTenantBranches(
+  roleCode: string,
+  branchIsHeadOffice?: boolean | null,
+) {
+  if (isTenantAdminRole(roleCode)) return true;
+  return Boolean(branchIsHeadOffice) && isHeadOfficeAllBranchesRole(roleCode);
+}
+
 /** @deprecated Use isTenantAdminRole — kept for call-site compatibility. */
 export function isSuperAdminRole(roleCode: string) {
   return isTenantAdminRole(roleCode);
