@@ -23,6 +23,7 @@ import { OperationsModule } from './operations/operations.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { ReportsModule } from './reports/reports.module';
 import { TenantsModule } from './tenants/tenants.module';
+import { PlatformModule } from './platform/platform.module';
 import { MailModule } from './mail/mail.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { HealthController } from './health/health.controller';
@@ -59,6 +60,7 @@ import { AuditMutationInterceptor } from './common/audit-mutation.interceptor';
     DashboardModule,
     ReportsModule,
     TenantsModule,
+    PlatformModule,
     MailModule,
     NotificationsModule,
   ],

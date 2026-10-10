@@ -31,6 +31,11 @@ import {
   UpsertSmtpPasswordDto,
 } from './dto/mail.dto';
 import { preferIpv4Transport } from './smtp-ipv4';
+import {
+  CloudwaysMailClient,
+  type CloudwaysTransportPayload,
+} from './cloudways-mail.client';
+import { PlatformSettingsService } from '../platform/platform-settings.service';
 
 type OauthStatePayload = {
   purpose: 'smtp_oauth';
@@ -48,6 +53,8 @@ export class MailService {
     private readonly config: ConfigService,
     private readonly jwt: JwtService,
     private readonly audit: AuditService,
+    private readonly platform: PlatformSettingsService,
+    private readonly cloudways: CloudwaysMailClient,
   ) {}
 
   private publicApiBase() {
@@ -660,6 +667,122 @@ export class MailService {
     return message;
   }
 
+  /** Build Cloudways relay transport from the same tenant SMTP/OAuth row. */
+  private async buildCloudwaysTransport(tenantId?: string): Promise<{
+    tenantId: string;
+    fromEmail: string;
+    fromName: string | null;
+    fromHeader: string;
+    transport: CloudwaysTransportPayload;
+  }> {
+    const tid = tenantId || currentTenantId();
+    const row = await this.prisma.tenantSmtpConfig.findUnique({
+      where: { tenantId: tid },
+    });
+    if (!row) {
+      throw new NotFoundException(
+        'Email not configured for this organisation — Settings → Email',
+      );
+    }
+    const fromEmail = row.fromEmail || row.oauthEmail || row.username;
+    if (!fromEmail) throw new BadRequestException('From email missing');
+
+    if (row.authMode === 'OAUTH') {
+      const accessToken = await this.refreshOauthIfNeeded(row);
+      const refreshToken = decryptSecret(this.config, row.oauthRefreshTokenEnc);
+      if (!refreshToken) {
+        throw new BadRequestException(
+          'OAuth credentials cannot be decrypted — reconnect email (SMTP_SECRET may have changed)',
+        );
+      }
+      const isGmail = row.provider === 'GMAIL';
+      const creds = isGmail ? this.googleCreds() : this.msCreds();
+      if (!creds.clientId || !creds.clientSecret) {
+        throw new ServiceUnavailableException(
+          isGmail
+            ? 'Gmail OAuth is not configured on the server'
+            : 'Microsoft OAuth is not configured on the server',
+        );
+      }
+      const host =
+        row.host ||
+        (isGmail ? 'smtp.gmail.com' : 'smtp.office365.com');
+      const port = row.port || (isGmail ? 465 : 587);
+      const secure = isGmail ? true : Boolean(row.secure);
+      return {
+        tenantId: tid,
+        fromEmail,
+        fromName: row.fromName,
+        fromHeader: row.fromName
+          ? `"${row.fromName}" <${fromEmail}>`
+          : fromEmail,
+        transport: {
+          provider: row.provider,
+          authMode: 'OAUTH',
+          host,
+          port,
+          secure,
+          username: fromEmail,
+          oauth: {
+            accessToken,
+            refreshToken,
+            clientId: creds.clientId,
+            clientSecret: creds.clientSecret,
+            user: fromEmail,
+          },
+        },
+      };
+    }
+
+    const password = decryptSecret(this.config, row.passwordEnc);
+    if (!password) {
+      throw new BadRequestException(
+        'SMTP password missing or cannot be decrypted — re-save the password in Settings → Email (SMTP_SECRET may have changed)',
+      );
+    }
+    if (!row.host) {
+      throw new BadRequestException(
+        'SMTP host is missing — re-save email settings',
+      );
+    }
+    return {
+      tenantId: tid,
+      fromEmail,
+      fromName: row.fromName,
+      fromHeader: row.fromName
+        ? `"${row.fromName}" <${fromEmail}>`
+        : fromEmail,
+      transport: {
+        provider: row.provider,
+        authMode: 'PASSWORD',
+        host: row.host,
+        port: row.port || 587,
+        secure: row.secure,
+        username: row.username || fromEmail,
+        password,
+      },
+    };
+  }
+
+  private toCloudwaysAttachments(
+    attachments?: Array<{
+      filename: string;
+      content: Buffer | string;
+      contentType?: string;
+      cid?: string;
+    }>,
+  ) {
+    if (!attachments?.length) return undefined;
+    return attachments.map((a) => ({
+      filename: a.filename,
+      contentBase64: Buffer.isBuffer(a.content)
+        ? a.content.toString('base64')
+        : Buffer.from(a.content).toString('base64'),
+      contentType: a.contentType,
+      cid: a.cid,
+    }));
+  }
+
   async sendMail(input: {
     to: string;
     subject: string;
@@ -674,6 +797,53 @@ export class MailService {
       cid?: string;
     }>;
   }) {
+    const relay = await this.platform.resolveCloudwaysRelay();
+    if (relay.mode === 'cloudways') {
+      if (!relay.url || !relay.apiKey) {
+        throw new ServiceUnavailableException(
+          'Cloudways mail relay is enabled but URL/API key is missing — CRM → Email delivery',
+        );
+      }
+      const built = await this.buildCloudwaysTransport(input.tenantId);
+      try {
+        const info = await this.cloudways.send({
+          url: relay.url,
+          apiKey: relay.apiKey,
+          to: input.to,
+          subject: input.subject,
+          text: input.text,
+          html: input.html,
+          cc: input.cc,
+          from: { email: built.fromEmail, name: built.fromName },
+          transport: built.transport,
+          attachments: this.toCloudwaysAttachments(input.attachments),
+        });
+        await this.recordTestResult(built.tenantId, true);
+        return { messageId: info.messageId, accepted: info.accepted };
+      } catch (err) {
+        if (
+          err instanceof BadRequestException ||
+          err instanceof NotFoundException ||
+          err instanceof ServiceUnavailableException
+        ) {
+          const msg =
+            err instanceof BadRequestException
+              ? String(
+                  (err.getResponse() as { message?: string })?.message ||
+                    err.message,
+                )
+              : err.message;
+          await this.recordTestResult(built.tenantId, false, msg);
+          throw err;
+        }
+        const raw = err instanceof Error ? err.message : String(err);
+        const message = this.formatSendError(raw);
+        this.logger.warn(`sendMail (cloudways) failed: ${raw}`);
+        await this.recordTestResult(built.tenantId, false, message);
+        throw new BadRequestException(`Email send failed: ${message}`);
+      }
+    }
+
     const { transporter, from, tenantId } = await this.buildTransport(
       input.tenantId,
     );

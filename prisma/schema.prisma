@@ -506,6 +506,21 @@ model TenantSmtpConfig {
   @@map("tenant_smtp_configs")
 }
 
+/**
+ * Platform-wide key/value settings (CRM Admin). Not tenant-scoped.
+ * Example key `mail_delivery`: { mode, url, apiKeyEnc }.
+ */
+model PlatformSetting {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique @db.VarChar(80)
+  value     Json
+  updatedBy String?  @map("updated_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_settings")
+}
+
 model ExpenseCategory {
   id          String  @id @default(uuid()) @db.Uuid
   tenantId    String  @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
