@@ -15,6 +15,7 @@ import { MastersService } from './masters.service';
 import {
   CreateBankAccountDto,
   CreateCategoryDto,
+  CreateCourseDto,
   CreateGlAccountDto,
   CreateSubAgentDto,
   CreateTenantCountryDto,
@@ -22,6 +23,7 @@ import {
   CreateVendorDto,
   UpdateBankAccountDto,
   UpdateCategoryDto,
+  UpdateCourseDto,
   UpdateCurrencyDto,
   UpdateSubAgentDto,
   UpdateTenantCountryDto,
@@ -86,6 +88,46 @@ export class MastersController {
     @CurrentUser() user: AuthUserPayload,
   ) {
     return this.masters.deleteUniversity(id, user.id);
+  }
+
+  // ── Courses (Settings master) ─────────────────────────────────────────────
+
+  @Get('courses')
+  listCourses(@Query('includeInactive') includeInactive?: string) {
+    return this.masters.listCourses(includeInactive === 'true');
+  }
+
+  @Get('courses/:id')
+  getCourse(@Param('id') id: string) {
+    return this.masters.getCourse(id);
+  }
+
+  @Post('courses')
+  @RequirePermission(MODULE_CODES.SETTINGS, 'full')
+  createCourse(
+    @Body() dto: CreateCourseDto,
+    @CurrentUser() user: AuthUserPayload,
+  ) {
+    return this.masters.createCourse(dto, user.id);
+  }
+
+  @Patch('courses/:id')
+  @RequirePermission(MODULE_CODES.SETTINGS, 'full')
+  updateCourse(
+    @Param('id') id: string,
+    @Body() dto: UpdateCourseDto,
+    @CurrentUser() user: AuthUserPayload,
+  ) {
+    return this.masters.updateCourse(id, dto, user.id);
+  }
+
+  @Delete('courses/:id')
+  @RequirePermission(MODULE_CODES.SETTINGS, 'full')
+  deleteCourse(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUserPayload,
+  ) {
+    return this.masters.deleteCourse(id, user.id);
   }
 
   // ── Destination countries (tenant Settings master) ────────────────────────

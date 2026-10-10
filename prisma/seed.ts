@@ -687,7 +687,28 @@ async function main() {
     }
   }
 
-  // ── M4 sample students ────────────────────────────────────────────────────
+  // ── M4 courses master + sample students ───────────────────────────────────
+  const courseNames = [
+    'MSc Data Science',
+    'BSc Computer Science',
+    'MBA',
+    'MEng Civil',
+    'BA Business',
+    'MSc Demo',
+    'Unspecified',
+  ];
+  const courseByName: Record<string, { id: string; name: string }> = {};
+  for (const name of courseNames) {
+    const row = await prisma.course.upsert({
+      where: {
+        tenantId_name: { tenantId: DEFAULT_TENANT_ID, name },
+      },
+      create: { tenantId: DEFAULT_TENANT_ID, name, isActive: true },
+      update: { isActive: true, deletedAt: null },
+    });
+    courseByName[name] = row;
+  }
+
   const counsellorFatima = await prisma.user.findUnique({
     where: { email: 'fatima@saa.com' },
   });
@@ -696,6 +717,43 @@ async function main() {
     orderBy: { name: 'asc' },
   });
   const uniByName = Object.fromEntries(unis.map((u) => [u.name, u]));
+
+  // Sample uni × course commission rates (others fall back to university default)
+  const courseRateSeed: Array<{
+    universityName: string;
+    courseName: string;
+    commissionRate: number;
+  }> = [
+    { universityName: 'University of Manchester', courseName: 'MSc Data Science', commissionRate: 15 },
+    { universityName: 'University of Manchester', courseName: 'MBA', commissionRate: 12 },
+    { universityName: 'Arizona State University', courseName: 'BSc Computer Science', commissionRate: 12.5 },
+    { universityName: 'Arizona State University', courseName: 'MBA', commissionRate: 10 },
+    { universityName: 'University of Toronto', courseName: 'MBA', commissionRate: 17.5 },
+    { universityName: 'Coventry University', courseName: 'BA Business', commissionRate: 18 },
+    { universityName: 'Monash University', courseName: 'MEng Civil', commissionRate: 17.5 },
+  ];
+  for (const r of courseRateSeed) {
+    const uni = uniByName[r.universityName];
+    const course = courseByName[r.courseName];
+    if (!uni || !course) continue;
+    await prisma.universityCourseRate.upsert({
+      where: {
+        tenantId_universityId_courseId: {
+          tenantId: DEFAULT_TENANT_ID,
+          universityId: uni.id,
+          courseId: course.id,
+        },
+      },
+      create: {
+        tenantId: DEFAULT_TENANT_ID,
+        universityId: uni.id,
+        courseId: course.id,
+        commissionRate: r.commissionRate,
+      },
+      update: { commissionRate: r.commissionRate },
+    });
+  }
+
   const subAgentsDb = await prisma.subAgent.findMany({
     where: { deletedAt: null },
   });
@@ -809,6 +867,8 @@ async function main() {
     for (const s of sampleStudents) {
       const uni = uniByName[s.universityName];
       if (!uni) continue;
+      const course = courseByName[s.course];
+      if (!course) continue;
       const subAgentId =
         s.subAgentIndex !== null && subAgentsDb[s.subAgentIndex]
           ? subAgentsDb[s.subAgentIndex].id
@@ -835,7 +895,7 @@ async function main() {
             counsellorId: s.counsellorId,
             country: s.country,
             universityId: uni.id,
-            course: s.course,
+            courseId: course.id,
             intake: s.intake,
             studentGroup: s.studentGroup,
             applicationStatus: s.applicationStatus,
@@ -859,7 +919,7 @@ async function main() {
             counsellorId: s.counsellorId,
             country: s.country,
             universityId: uni.id,
-            course: s.course,
+            courseId: course.id,
             intake: s.intake,
             studentGroup: s.studentGroup,
             applicationStatus: s.applicationStatus,
@@ -1843,7 +1903,19 @@ async function main() {
         },
       });
     }
-    if (demoAdminUser && demoUni) {
+    let demoCourse = await prisma.course.findFirst({
+      where: { tenantId: DEMO_TENANT_ID, name: 'MSc Demo', deletedAt: null },
+    });
+    if (!demoCourse) {
+      demoCourse = await prisma.course.create({
+        data: {
+          tenantId: DEMO_TENANT_ID,
+          name: 'MSc Demo',
+          isActive: true,
+        },
+      });
+    }
+    if (demoAdminUser && demoUni && demoCourse) {
       await prisma.student.upsert({
         where: {
           tenantId_studentCode: {
@@ -1862,7 +1934,7 @@ async function main() {
           counsellorId: demoAdminUser.id,
           country: 'UK',
           universityId: demoUni.id,
-          course: 'MSc Demo',
+          courseId: demoCourse.id,
           intake: 'Sep-2026',
           applicationStatus: 'Applied',
           tuitionFee: 10000,
@@ -1875,6 +1947,7 @@ async function main() {
           fullName: 'Demo Only Student',
           deletedAt: null,
           universityId: demoUni.id,
+          courseId: demoCourse.id,
           branchId: demoBranch.id,
           counsellorId: demoAdminUser.id,
         },

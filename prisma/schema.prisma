@@ -234,9 +234,11 @@ model Tenant {
   systemSettings      SystemSetting[]
   expenseCategories   ExpenseCategory[]
   pettyCashCategories PettyCashCategory[]
-  universities        University[]
-  tenantCountries     TenantCountry[]
-  subAgents           SubAgent[]
+  universities           University[]
+  tenantCountries        TenantCountry[]
+  courses                Course[]
+  universityCourseRates  UniversityCourseRate[]
+  subAgents              SubAgent[]
   vendors             Vendor[]
   students            Student[]
   invoices            Invoice[]
@@ -595,6 +597,9 @@ model University {
   tenantId              String    @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
   universityNo          String    @map("university_no") @db.VarChar(40)
   name                  String    @db.VarChar(200)
+  /// Full postal address for invoice Bill To (newlines allowed)
+  address               String?   @db.VarChar(1000)
+  vatNumber             String?   @map("vat_number") @db.VarChar(80)
   countryCode           String?   @map("country_code") @db.VarChar(2)
   countryName           String    @map("country_name") @db.VarChar(80)
   defaultCommissionRate Decimal   @map("default_commission_rate") @db.Decimal(8, 4)
@@ -606,15 +611,56 @@ model University {
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
-  country  Country?  @relation(fields: [countryCode], references: [code])
-  currency Currency  @relation(fields: [currencyCode], references: [code])
-  students Student[]
-  invoices Invoice[]
+  country     Country?               @relation(fields: [countryCode], references: [code])
+  currency    Currency               @relation(fields: [currencyCode], references: [code])
+  students    Student[]
+  invoices    Invoice[]
+  courseRates UniversityCourseRate[]
 
   @@unique([tenantId, universityNo])
   @@index([tenantId])
   @@index([countryName])
   @@map("universities")
+}
+
+/** Tenant-registered courses (Settings master — like universities). */
+model Course {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  name      String    @db.VarChar(200)
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant          Tenant                 @relation(fields: [tenantId], references: [id])
+  students        Student[]
+  universityRates UniversityCourseRate[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("courses")
+}
+
+/** Per-university commission % by course (fallback: University.defaultCommissionRate). */
+model UniversityCourseRate {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  universityId   String   @map("university_id") @db.Uuid
+  courseId       String   @map("course_id") @db.Uuid
+  commissionRate Decimal  @map("commission_rate") @db.Decimal(8, 4)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  university University @relation(fields: [universityId], references: [id])
+  course     Course     @relation(fields: [courseId], references: [id])
+
+  @@unique([tenantId, universityId, courseId])
+  @@index([tenantId])
+  @@index([universityId])
+  @@index([courseId])
+  @@map("university_course_rates")
 }
 
 model SubAgent {
@@ -681,7 +727,7 @@ model Student {
   counsellorId           String?           @map("counsellor_id") @db.Uuid
   country                String            @db.VarChar(80)
   universityId           String            @map("university_id") @db.Uuid
-  course                 String            @db.VarChar(200)
+  courseId               String            @map("course_id") @db.Uuid
   intake                 String            @db.VarChar(40)
   studentGroup           String?           @map("student_group") @db.VarChar(80)
   applicationStatus      ApplicationStatus @map("application_status")
@@ -701,6 +747,7 @@ model Student {
   branch        Branch                 @relation(fields: [branchId], references: [id])
   counsellor    User?                  @relation("StudentCounsellor", fields: [counsellorId], references: [id])
   university    University             @relation(fields: [universityId], references: [id])
+  course        Course                 @relation(fields: [courseId], references: [id])
   subAgent      SubAgent?              @relation(fields: [subAgentId], references: [id])
   currency      Currency               @relation(fields: [currencyCode], references: [code])
   createdBy     User?                  @relation("StudentCreatedBy", fields: [createdById], references: [id])
@@ -714,6 +761,7 @@ model Student {
   @@index([branchId, applicationStatus])
   @@index([counsellorId])
   @@index([universityId])
+  @@index([courseId])
   @@map("students")
 }
 

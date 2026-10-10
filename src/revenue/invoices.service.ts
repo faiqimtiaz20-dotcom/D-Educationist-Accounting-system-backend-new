@@ -35,13 +35,21 @@ const invoiceInclude = {
           id: true,
           studentCode: true,
           fullName: true,
-          course: true,
+          course: { select: { id: true, name: true } },
         },
       },
     },
     orderBy: { lineNo: 'asc' as const },
   },
-  university: { select: { id: true, name: true, countryName: true } },
+  university: {
+    select: {
+      id: true,
+      name: true,
+      countryName: true,
+      address: true,
+      vatNumber: true,
+    },
+  },
   branch: { select: { id: true, code: true, name: true } },
   receivables: {
     where: { isBulkRemittance: false },
@@ -463,7 +471,19 @@ export class InvoicesService {
         const billTo = row.university
           ? {
               name: row.university.name,
-              lines: [row.university.countryName].filter(Boolean),
+              lines: [
+                ...(row.university.address
+                  ? row.university.address
+                      .replace(/\r\n/g, '\n')
+                      .split('\n')
+                      .map((l) => l.trim())
+                      .filter(Boolean)
+                  : []),
+                row.university.countryName,
+                row.university.vatNumber
+                  ? `VAT number: ${row.university.vatNumber}`
+                  : '',
+              ].filter(Boolean),
             }
           : null;
         const pdf = await buildInvoicePdf({
@@ -476,7 +496,7 @@ export class InvoicesService {
           lines: row.lines.map((l) => ({
             studentName: l.student?.fullName || l.studentId,
             studentCode: l.student?.studentCode,
-            course: l.student?.course ?? null,
+            course: l.student?.course?.name ?? null,
             tuitionFee: Number(l.tuitionFee),
             detail: undefined,
             amount: Number(l.commissionAmount),

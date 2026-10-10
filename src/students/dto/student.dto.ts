@@ -56,10 +56,8 @@ export class CreateStudentDto {
   @IsUUID()
   universityId!: string;
 
-  @IsString()
-  @MinLength(1)
-  @MaxLength(200)
-  course!: string;
+  @IsUUID()
+  courseId!: string;
 
   @IsString()
   @MinLength(1)
@@ -146,9 +144,8 @@ export class UpdateStudentDto {
   universityId?: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  course?: string;
+  @IsUUID()
+  courseId?: string;
 
   @IsOptional()
   @IsString()

@@ -1,5 +1,7 @@
 import { GlAccountType } from '@prisma/client';
+import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsBoolean,
   IsEnum,
   IsNumber,
@@ -10,7 +12,19 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
+
+export class UniversityCourseRateItemDto {
+  @IsUUID()
+  courseId!: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  commissionRate!: number;
+}
 
 export class CreateUniversityDto {
   @IsString()
@@ -28,6 +42,17 @@ export class CreateUniversityDto {
   @MaxLength(2)
   countryCode?: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  address?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  vatNumber?: string | null;
+
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   @Max(100)
@@ -41,6 +66,13 @@ export class CreateUniversityDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  /** When set, replaces all course-specific rates for this university. */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UniversityCourseRateItemDto)
+  courseRates?: UniversityCourseRateItemDto[];
 }
 
 export class CreateTenantCountryDto {
@@ -93,6 +125,17 @@ export class UpdateUniversityDto {
   countryCode?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  address?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  vatNumber?: string | null;
+
+  @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   @Max(100)
@@ -102,6 +145,36 @@ export class UpdateUniversityDto {
   @IsString()
   @MaxLength(3)
   currencyCode?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  /** When set, replaces all course-specific rates for this university. */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UniversityCourseRateItemDto)
+  courseRates?: UniversityCourseRateItemDto[];
+}
+
+export class CreateCourseDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+export class UpdateCourseDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name?: string;
 
   @IsOptional()
   @IsBoolean()

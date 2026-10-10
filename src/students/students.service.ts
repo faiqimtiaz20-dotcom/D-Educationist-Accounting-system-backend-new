@@ -21,6 +21,7 @@ import {
 
 const studentInclude = {
   university: { select: { id: true, name: true, countryName: true, currencyCode: true } },
+  course: { select: { id: true, name: true } },
   counsellor: { select: { id: true, fullName: true, email: true } },
   branch: { select: { id: true, code: true, name: true } },
   subAgent: { select: { id: true, name: true } },
@@ -84,7 +85,7 @@ export class StudentsService {
             OR: [
               { fullName: { contains: query.q, mode: 'insensitive' } },
               { studentCode: { contains: query.q, mode: 'insensitive' } },
-              { course: { contains: query.q, mode: 'insensitive' } },
+              { course: { name: { contains: query.q, mode: 'insensitive' } } },
               { university: { name: { contains: query.q, mode: 'insensitive' } } },
             ],
           }
@@ -159,6 +160,7 @@ export class StudentsService {
       branchId,
       counsellorId,
       universityId: dto.universityId,
+      courseId: dto.courseId,
       subAgentId: dto.subAgentId,
       currencyCode: dto.currencyCode,
     });
@@ -190,7 +192,7 @@ export class StudentsService {
             counsellorId,
             country: dto.country.trim(),
             universityId: dto.universityId,
-            course: dto.course.trim(),
+            courseId: dto.courseId,
             intake: dto.intake.trim(),
             studentGroup: dto.studentGroup?.trim() || null,
             applicationStatus: status,
@@ -239,7 +241,7 @@ export class StudentsService {
             counsellorId,
             country: dto.country.trim(),
             universityId: dto.universityId,
-            course: dto.course.trim(),
+            courseId: dto.courseId,
             intake: dto.intake.trim(),
             studentGroup: dto.studentGroup?.trim() || null,
             applicationStatus: status,
@@ -317,6 +319,7 @@ export class StudentsService {
       branchId: nextBranchId,
       counsellorId: nextCounsellorId,
       universityId: dto.universityId ?? before.universityId,
+      courseId: dto.courseId ?? before.courseId,
       subAgentId:
         dto.subAgentId !== undefined ? dto.subAgentId : before.subAgentId,
       currencyCode: dto.currencyCode ?? before.currencyCode,
@@ -358,7 +361,7 @@ export class StudentsService {
           ...(dto.universityId !== undefined
             ? { universityId: dto.universityId }
             : {}),
-          ...(dto.course !== undefined ? { course: dto.course.trim() } : {}),
+          ...(dto.courseId !== undefined ? { courseId: dto.courseId } : {}),
           ...(dto.intake !== undefined ? { intake: dto.intake.trim() } : {}),
           ...(dto.studentGroup !== undefined
             ? { studentGroup: dto.studentGroup?.trim() || null }
@@ -445,6 +448,7 @@ export class StudentsService {
     branchId: string;
     counsellorId?: string | null;
     universityId: string;
+    courseId: string;
     subAgentId?: string | null;
     currencyCode: string;
   }) {
@@ -465,6 +469,11 @@ export class StudentsService {
       where: { id: input.universityId, deletedAt: null, isActive: true },
     });
     if (!university) throw new BadRequestException('Invalid university');
+
+    const course = await this.prisma.course.findFirst({
+      where: { id: input.courseId, deletedAt: null, isActive: true },
+    });
+    if (!course) throw new BadRequestException('Invalid course');
 
     const currency = await this.prisma.currency.findUnique({
       where: { code: input.currencyCode.toUpperCase() },

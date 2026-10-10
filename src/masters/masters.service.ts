@@ -13,6 +13,7 @@ import { currentTenantId } from '../common/tenant-scope';
 import {
   CreateBankAccountDto,
   CreateCategoryDto,
+  CreateCourseDto,
   CreateGlAccountDto,
   CreateSubAgentDto,
   CreateTenantCountryDto,
@@ -20,6 +21,7 @@ import {
   CreateVendorDto,
   UpdateBankAccountDto,
   UpdateCategoryDto,
+  UpdateCourseDto,
   UpdateCurrencyDto,
   UpdateSubAgentDto,
   UpdateTenantCountryDto,
@@ -73,12 +75,22 @@ export class MastersService {
 
   // ── Universities ──────────────────────────────────────────────────────────
 
+  private readonly universityInclude = {
+    courseRates: {
+      include: {
+        course: { select: { id: true, name: true, isActive: true } },
+      },
+      orderBy: { course: { name: 'asc' as const } },
+    },
+  } satisfies Prisma.UniversityInclude;
+
   listUniversities(includeInactive = false) {
     return this.prisma.university.findMany({
       where: {
         deletedAt: null,
         ...(includeInactive ? {} : { isActive: true }),
       },
+      include: this.universityInclude,
       orderBy: { name: 'asc' },
     });
   }
@@ -86,9 +98,46 @@ export class MastersService {
   async getUniversity(id: string) {
     const row = await this.prisma.university.findFirst({
       where: { id, deletedAt: null },
+      include: this.universityInclude,
     });
     if (!row) throw new NotFoundException('University not found');
     return row;
+  }
+
+  private async assertCourseIds(courseIds: string[]) {
+    const unique = [...new Set(courseIds)];
+    if (unique.length === 0) return;
+    const found = await this.prisma.course.findMany({
+      where: { id: { in: unique }, deletedAt: null },
+      select: { id: true },
+    });
+    if (found.length !== unique.length) {
+      throw new BadRequestException('One or more courses are invalid');
+    }
+    const seen = new Set<string>();
+    for (const id of courseIds) {
+      if (seen.has(id)) {
+        throw new BadRequestException('Duplicate course in course rates');
+      }
+      seen.add(id);
+    }
+  }
+
+  private async syncUniversityCourseRates(
+    tx: Prisma.TransactionClient,
+    universityId: string,
+    rates: Array<{ courseId: string; commissionRate: number }>,
+  ) {
+    await this.assertCourseIds(rates.map((r) => r.courseId));
+    await tx.universityCourseRate.deleteMany({ where: { universityId } });
+    if (rates.length === 0) return;
+    await tx.universityCourseRate.createMany({
+      data: rates.map((r) => ({
+        universityId,
+        courseId: r.courseId,
+        commissionRate: r.commissionRate,
+      })),
+    });
   }
 
   async createUniversity(dto: CreateUniversityDto, actorId: string) {
@@ -101,22 +150,34 @@ export class MastersService {
       tenantCountry.name,
       tenantCountry.isoCode ?? dto.countryCode,
     );
+    if (dto.courseRates) {
+      await this.assertCourseIds(dto.courseRates.map((r) => r.courseId));
+    }
     const row = await this.prisma.$transaction(async (tx) => {
       const universityNo = await nextMasterNo(tx, {
         model: 'university',
         field: 'universityNo',
         prefix: 'UNI-',
       });
-      return tx.university.create({
+      const created = await tx.university.create({
         data: {
           universityNo,
           name: dto.name.trim(),
           countryName: tenantCountry.name,
           countryCode,
+          address: dto.address?.trim() || null,
+          vatNumber: dto.vatNumber?.trim() || null,
           defaultCommissionRate: dto.defaultCommissionRate,
           currencyCode: dto.currencyCode.toUpperCase(),
           isActive: dto.isActive ?? true,
         },
+      });
+      if (dto.courseRates) {
+        await this.syncUniversityCourseRates(tx, created.id, dto.courseRates);
+      }
+      return tx.university.findFirstOrThrow({
+        where: { id: created.id },
+        include: this.universityInclude,
       });
     });
     await this.audit.log({
@@ -146,21 +207,39 @@ export class MastersService {
         tenantCountry.isoCode ?? dto.countryCode ?? before.countryCode,
       );
     }
-    const row = await this.prisma.university.update({
-      where: { id },
-      data: {
-        ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-        ...(dto.countryName !== undefined || dto.countryCode !== undefined
-          ? { countryName, countryCode }
-          : {}),
-        ...(dto.defaultCommissionRate !== undefined
-          ? { defaultCommissionRate: dto.defaultCommissionRate }
-          : {}),
-        ...(dto.currencyCode !== undefined
-          ? { currencyCode: dto.currencyCode.toUpperCase() }
-          : {}),
-        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
-      },
+    if (dto.courseRates) {
+      await this.assertCourseIds(dto.courseRates.map((r) => r.courseId));
+    }
+    const row = await this.prisma.$transaction(async (tx) => {
+      await tx.university.update({
+        where: { id },
+        data: {
+          ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+          ...(dto.countryName !== undefined || dto.countryCode !== undefined
+            ? { countryName, countryCode }
+            : {}),
+          ...(dto.address !== undefined
+            ? { address: dto.address?.trim() || null }
+            : {}),
+          ...(dto.vatNumber !== undefined
+            ? { vatNumber: dto.vatNumber?.trim() || null }
+            : {}),
+          ...(dto.defaultCommissionRate !== undefined
+            ? { defaultCommissionRate: dto.defaultCommissionRate }
+            : {}),
+          ...(dto.currencyCode !== undefined
+            ? { currencyCode: dto.currencyCode.toUpperCase() }
+            : {}),
+          ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+        },
+      });
+      if (dto.courseRates) {
+        await this.syncUniversityCourseRates(tx, id, dto.courseRates);
+      }
+      return tx.university.findFirstOrThrow({
+        where: { id },
+        include: this.universityInclude,
+      });
     });
     await this.audit.log({
       userId: actorId,
@@ -189,6 +268,147 @@ export class MastersService {
       beforeData: before as unknown as Prisma.InputJsonValue,
     });
     return { success: true };
+  }
+
+  // ── Courses ───────────────────────────────────────────────────────────────
+
+  listCourses(includeInactive = false) {
+    return this.prisma.course.findMany({
+      where: {
+        deletedAt: null,
+        ...(includeInactive ? {} : { isActive: true }),
+      },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async getCourse(id: string) {
+    const row = await this.prisma.course.findFirst({
+      where: { id, deletedAt: null },
+    });
+    if (!row) throw new NotFoundException('Course not found');
+    return row;
+  }
+
+  async createCourse(dto: CreateCourseDto, actorId: string) {
+    const name = dto.name.trim();
+    if (!name) throw new BadRequestException('Course name is required');
+    const clash = await this.prisma.course.findFirst({
+      where: {
+        name: { equals: name, mode: 'insensitive' },
+        deletedAt: null,
+      },
+    });
+    if (clash) throw new ConflictException(`Course "${name}" already exists`);
+    try {
+      const row = await this.prisma.course.create({
+        data: {
+          name,
+          isActive: dto.isActive ?? true,
+        },
+      });
+      await this.audit.log({
+        userId: actorId,
+        action: 'CREATE',
+        module: 'Settings',
+        entityType: 'Course',
+        entityId: row.id,
+        afterData: row as unknown as Prisma.InputJsonValue,
+      });
+      return row;
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        throw new ConflictException(`Course "${name}" already exists`);
+      }
+      throw e;
+    }
+  }
+
+  async updateCourse(id: string, dto: UpdateCourseDto, actorId: string) {
+    const before = await this.getCourse(id);
+    const name = dto.name !== undefined ? dto.name.trim() : before.name;
+    if (dto.name !== undefined && !name) {
+      throw new BadRequestException('Course name is required');
+    }
+    if (dto.name !== undefined && name.toLowerCase() !== before.name.toLowerCase()) {
+      const clash = await this.prisma.course.findFirst({
+        where: {
+          name: { equals: name, mode: 'insensitive' },
+          deletedAt: null,
+          NOT: { id },
+        },
+      });
+      if (clash) throw new ConflictException(`Course "${name}" already exists`);
+    }
+    const row = await this.prisma.course.update({
+      where: { id },
+      data: {
+        ...(dto.name !== undefined ? { name } : {}),
+        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+      },
+    });
+    await this.audit.log({
+      userId: actorId,
+      action: 'UPDATE',
+      module: 'Settings',
+      entityType: 'Course',
+      entityId: id,
+      beforeData: before as unknown as Prisma.InputJsonValue,
+      afterData: row as unknown as Prisma.InputJsonValue,
+    });
+    return row;
+  }
+
+  async deleteCourse(id: string, actorId: string) {
+    const before = await this.getCourse(id);
+    const inUse = await this.prisma.student.count({
+      where: { courseId: id, deletedAt: null },
+    });
+    if (inUse > 0) {
+      throw new ConflictException(
+        `Cannot delete "${before.name}" — ${inUse} student(s) still use it`,
+      );
+    }
+    await this.prisma.universityCourseRate.deleteMany({ where: { courseId: id } });
+    await this.prisma.course.update({
+      where: { id },
+      data: { deletedAt: new Date(), isActive: false },
+    });
+    await this.audit.log({
+      userId: actorId,
+      action: 'DELETE',
+      module: 'Settings',
+      entityType: 'Course',
+      entityId: id,
+      beforeData: before as unknown as Prisma.InputJsonValue,
+    });
+    return { success: true };
+  }
+
+  /** Resolve courseId or create from name (CSV / legacy). */
+  async resolveCourseId(input: {
+    courseId?: string | null;
+    courseName?: string | null;
+  }): Promise<string> {
+    if (input.courseId) {
+      await this.getCourse(input.courseId);
+      return input.courseId;
+    }
+    const name = (input.courseName ?? '').trim() || 'Unspecified';
+    const existing = await this.prisma.course.findFirst({
+      where: {
+        name: { equals: name, mode: 'insensitive' },
+        deletedAt: null,
+      },
+    });
+    if (existing) return existing.id;
+    const created = await this.prisma.course.create({
+      data: { name, isActive: true },
+    });
+    return created.id;
   }
 
   // ── Tenant countries ──────────────────────────────────────────────────────
