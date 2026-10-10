@@ -40,6 +40,39 @@ export type CloudwaysSendInput = {
   }>;
 };
 
+function methodHint(method?: string) {
+  return (method || 'GET').toUpperCase();
+}
+
+/** Resolve Nest CRM URL (…/send or …/api/v1 or …/index.php) + relative path. */
+export function resolveCloudwaysEndpoint(configuredUrl: string, path: string): string {
+  const base = configuredUrl.replace(/\/$/, '');
+  const rel = path.startsWith('/') ? path : `/${path}`;
+  const apiPath =
+    rel === '/send' || rel === '/health' || rel === '/test'
+      ? `/api/v1${rel}`
+      : rel.startsWith('/api/v1')
+        ? rel
+        : `/api/v1${rel}`;
+
+  // Flat Cloudways entry without nginx rewrite: …/index.php?route=/api/v1/send
+  if (/\/index\.php$/i.test(base) || /\/public\/index\.php$/i.test(base)) {
+    const joiner = base.includes('?') ? '&' : '?';
+    return `${base}${joiner}route=${encodeURIComponent(apiPath)}`;
+  }
+
+  if (/\/send$/i.test(base)) {
+    return rel === '/send' || apiPath === '/api/v1/send'
+      ? base
+      : base.replace(/\/api\/v1\/send$/i, apiPath).replace(/\/send$/i, apiPath);
+  }
+  if (/\/api\/v1$/i.test(base)) {
+    return `${base}${rel.startsWith('/api/v1') ? rel.slice('/api/v1'.length) : rel}`;
+  }
+  // Bare origin → assume /api/v1 prefix
+  return `${base}${apiPath}`;
+}
+
 @Injectable()
 export class CloudwaysMailClient {
   private readonly logger = new Logger(CloudwaysMailClient.name);
@@ -50,13 +83,7 @@ export class CloudwaysMailClient {
     path: string,
     init?: RequestInit,
   ): Promise<T> {
-    const base = url.replace(/\/$/, '');
-    // Accept either full .../send URL or base .../api/v1
-    const endpoint = /\/send$/i.test(base)
-      ? path === '/send'
-        ? base
-        : base.replace(/\/send$/i, path)
-      : `${base}${path.startsWith('/') ? path : `/${path}`}`;
+    const endpoint = resolveCloudwaysEndpoint(url, path);
 
     let res: Response;
     try {
@@ -72,9 +99,9 @@ export class CloudwaysMailClient {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Cloudways relay unreachable: ${message}`);
+      this.logger.warn(`Cloudways relay unreachable (${endpoint}): ${message}`);
       throw new ServiceUnavailableException(
-        `Cloudways mail API unreachable: ${message}`,
+        `Cloudways mail API unreachable: ${message} [${endpoint}]`,
       );
     }
 
@@ -92,7 +119,10 @@ export class CloudwaysMailClient {
         body.error?.message ||
         body.message ||
         `Cloudways mail API HTTP ${res.status}`;
-      throw new BadRequestException(`Email send failed (relay): ${msg}`);
+      this.logger.warn(`Cloudways relay ${res.status} at ${endpoint}: ${msg}`);
+      throw new BadRequestException(
+        `Email send failed (relay): ${msg} [${methodHint(init?.method)} ${endpoint}]`,
+      );
     }
 
     return body as T;
