@@ -468,20 +468,42 @@ export class InvoicesService {
           applyInvoiceTemplate(branding.emailBody, tplVars);
         // Email body = cover letter (form/template). Invoice goes as PDF attach.
         const html = buildInvoiceEmailHtml(text);
-        const billTo = row.university
+        let uniForBillTo = row.university;
+        if (!uniForBillTo) {
+          // Legacy invoices without universityId — resolve from first student.
+          const firstStudentId = row.lines[0]?.studentId;
+          if (firstStudentId) {
+            const stu = await this.prisma.student.findFirst({
+              where: { id: firstStudentId, deletedAt: null },
+              select: {
+                university: {
+                  select: {
+                    id: true,
+                    name: true,
+                    countryName: true,
+                    address: true,
+                    vatNumber: true,
+                  },
+                },
+              },
+            });
+            uniForBillTo = stu?.university ?? null;
+          }
+        }
+        const billTo = uniForBillTo
           ? {
-              name: row.university.name,
+              name: uniForBillTo.name,
               lines: [
-                ...(row.university.address
-                  ? row.university.address
+                ...(uniForBillTo.address
+                  ? uniForBillTo.address
                       .replace(/\r\n/g, '\n')
                       .split('\n')
                       .map((l) => l.trim())
                       .filter(Boolean)
                   : []),
-                row.university.countryName,
-                row.university.vatNumber
-                  ? `VAT number: ${row.university.vatNumber}`
+                uniForBillTo.countryName,
+                uniForBillTo.vatNumber
+                  ? `VAT number: ${uniForBillTo.vatNumber}`
                   : '',
               ].filter(Boolean),
             }

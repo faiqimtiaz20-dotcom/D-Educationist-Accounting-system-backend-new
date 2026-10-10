@@ -136,12 +136,18 @@ export function buildInvoiceHtml(input: {
     })}`;
   const paid = input.paid ?? 0;
   const outstanding = Math.max(0, input.total - paid);
-  const contactBits = [
-    input.branding.address,
-    input.branding.phone,
-    input.branding.email,
-    input.branding.website,
-  ].filter(Boolean);
+  const companyLabel =
+    input.branding.companyLegalName || input.orgName || "D' Educationist";
+  const footerChips = [
+    { label: 'Address', value: input.branding.address },
+    { label: 'Phone', value: input.branding.phone },
+    {
+      label: 'Contact',
+      value: [input.branding.email, input.branding.website]
+        .filter(Boolean)
+        .join(' · '),
+    },
+  ].filter((c) => Boolean(c.value && String(c.value).trim()));
 
   const lineRows = input.lines
     .map(
@@ -194,19 +200,20 @@ export function buildInvoiceHtml(input: {
           ${
             input.logoDataUrl
               ? `<img src="${input.logoDataUrl}" alt="Logo" style="max-height:64px;max-width:180px;" />`
-              : `<div style="font-size:22px;font-weight:700;">${escapeHtml(input.branding.documentTitle || 'INVOICE')}</div>`
+              : `<div style="font-size:22px;font-weight:700;color:${escapeHtml(accent)};">${escapeHtml((input.branding.documentTitle || 'INVOICE').toUpperCase())}</div>`
+          }
+          ${
+            input.logoDataUrl
+              ? `<div style="margin-top:8px;font-size:14px;font-weight:700;color:${escapeHtml(accent)};">${escapeHtml((input.branding.documentTitle || 'INVOICE').toUpperCase())}</div>`
+              : ''
           }
         </td>
         <td style="text-align:right;font-size:13px;">
           <div><span style="color:#6b7280;">Invoice Number:</span> <strong>${escapeHtml(input.invoiceNo)}</strong></div>
           <div style="margin-top:4px;"><span style="color:#6b7280;">Invoice Date:</span> <strong>${escapeHtml(input.invoiceDate)}</strong></div>
+          <div style="margin-top:4px;font-size:12px;color:#6b7280;">Status: ${escapeHtml(input.status)}</div>
         </td>
       </tr></table>
-      ${
-        contactBits.length
-          ? `<div style="margin-top:10px;font-size:12px;color:#6b7280;">${contactBits.map(escapeHtml).join(' · ')}</div>`
-          : ''
-      }
     </div>
     <div style="padding:20px 24px;">
       <table width="100%" style="font-size:13px;margin-bottom:18px;"><tr>
@@ -233,9 +240,24 @@ export function buildInvoiceHtml(input: {
         <div style="color:#059669;margin-top:4px;">Paid: ${escapeHtml(fmt(paid))}</div>
         <div style="font-weight:700;margin-top:4px;">Outstanding: ${escapeHtml(fmt(outstanding))}</div>
       </div>
+    </div>
+    <div style="background:#f8fafc;border-top:2px solid ${escapeHtml(accent)};padding:14px 24px 16px;">
+      <div style="font-size:12px;font-weight:700;color:${escapeHtml(accent)};margin-bottom:10px;">${escapeHtml(companyLabel)}</div>
+      ${
+        footerChips.length
+          ? `<table width="100%" style="font-size:11px;"><tr>${footerChips
+              .map(
+                (c) => `<td style="width:33%;vertical-align:top;padding-right:10px;">
+              <div style="font-size:9px;font-weight:700;letter-spacing:0.06em;color:#9ca3af;text-transform:uppercase;margin-bottom:3px;">${escapeHtml(c.label)}</div>
+              <div style="color:#374151;line-height:1.35;">${escapeHtml(String(c.value))}</div>
+            </td>`,
+              )
+              .join('')}</tr></table>`
+          : ''
+      }
       ${
         input.branding.footer
-          ? `<p style="margin-top:20px;font-size:12px;color:#6b7280;">${escapeHtml(input.branding.footer)}</p>`
+          ? `<p style="margin:12px 0 0;font-size:11px;color:#6b7280;font-style:italic;text-align:center;">${escapeHtml(input.branding.footer)}</p>`
           : ''
       }
     </div>

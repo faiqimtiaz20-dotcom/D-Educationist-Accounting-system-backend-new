@@ -55,8 +55,24 @@ export class SettingsService {
     const row = await this.prisma.systemSetting.findUnique({
       where: { tenantId_key: { tenantId, key } },
     });
-    if (!row) return fallback;
+    if (!row || row.value === null || row.value === undefined) return fallback;
     return row.value as T;
+  }
+
+  /** Prisma Json may store path as a plain string (or rarely quoted). */
+  private normalizeLogoPath(raw: unknown): string | null {
+    if (raw == null) return null;
+    if (typeof raw !== 'string') return null;
+    const s = raw.trim().replace(/^"+|"+$/g, '');
+    return s || null;
+  }
+
+  /**
+   * PDFKit only embeds PNG/JPEG reliably. Normalize any uploaded logo to PNG.
+   */
+  private async toPdfPngBuffer(buffer: Buffer): Promise<Buffer> {
+    const sharp = (await import('sharp')).default;
+    return sharp(buffer).rotate().png({ compressionLevel: 9 }).toBuffer();
   }
 
   async getInvoiceBranding(): Promise<InvoiceBranding> {
@@ -118,9 +134,12 @@ export class SettingsService {
       this.getValue<string>(KEYS.iban, DEFAULT_INVOICE_BRANDING.iban),
     ]);
 
-    const abs = logoPath ? this.resolveUploadPath(logoPath) : null;
+    const normalizedLogoPath = this.normalizeLogoPath(logoPath);
+    const abs = normalizedLogoPath
+      ? this.resolveUploadPath(normalizedLogoPath)
+      : null;
     return {
-      logoPath,
+      logoPath: normalizedLogoPath,
       hasLogo: Boolean(abs && existsSync(abs)),
       address: address ?? '',
       phone: phone ?? '',
@@ -162,9 +181,15 @@ export class SettingsService {
     if (!branding.logoPath || !branding.hasLogo) return null;
     const abs = this.resolveUploadPath(branding.logoPath);
     const { readFileSync } = await import('fs');
-    const buffer = readFileSync(abs);
-    const ext = extname(abs).toLowerCase();
-    const mimeType = LOGO_MIME[ext] || 'application/octet-stream';
+    const raw = readFileSync(abs);
+    // Always PNG for PDFKit (WebP/GIF/odd PNG otherwise silently fail).
+    let buffer: Buffer;
+    try {
+      buffer = await this.toPdfPngBuffer(raw);
+    } catch {
+      buffer = raw;
+    }
+    const mimeType = 'image/png';
     return {
       buffer,
       mimeType,
@@ -329,9 +354,22 @@ export class SettingsService {
     const dirRel = join(tenantId, 'branding');
     const dirAbs = join(this.uploadRoot, dirRel);
     if (!existsSync(dirAbs)) mkdirSync(dirAbs, { recursive: true });
-    const filename = `logo-${randomUUID()}${ext}`;
+    // Persist as PNG so PDFKit can always embed (WebP/GIF/odd PNG fail otherwise).
+    let storeBuf = file.buffer;
+    let storeExt = ext;
+    try {
+      storeBuf = await this.toPdfPngBuffer(file.buffer);
+      storeExt = '.png';
+    } catch {
+      if (ext !== '.png' && ext !== '.jpg' && ext !== '.jpeg') {
+        throw new BadRequestException(
+          'Could not process logo. Please upload a PNG or JPG image.',
+        );
+      }
+    }
+    const filename = `logo-${randomUUID()}${storeExt}`;
     const rel = join(dirRel, filename).replace(/\\/g, '/');
-    writeFileSync(join(this.uploadRoot, rel), file.buffer);
+    writeFileSync(join(this.uploadRoot, rel), storeBuf);
 
     await this.prisma.systemSetting.upsert({
       where: { tenantId_key: { tenantId, key: KEYS.logoPath } },

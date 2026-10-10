@@ -45,25 +45,29 @@ export async function buildInvoicePdf(input: InvoicePdfInput): Promise<Buffer> {
     const width = right - left;
     let y = doc.page.margins.top;
 
-    // Header row: title/logo | invoice meta
+    // Header row: logo + title | invoice meta
     const headerTop = y;
+    let logoDrawn = false;
     if (input.logoBuffer?.length) {
       try {
-        doc.image(input.logoBuffer, left, y, { fit: [130, 50] });
+        doc.image(input.logoBuffer, left, y, { fit: [150, 56] });
+        logoDrawn = true;
       } catch {
-        /* ignore */
+        logoDrawn = false;
       }
+    }
+    if (logoDrawn) {
       doc
         .fillColor(accent)
         .font('Helvetica-Bold')
         .fontSize(14)
-        .text(title, left, y + 52, { width: width * 0.45 });
+        .text(title, left, y + 58, { width: width * 0.48 });
     } else {
       doc
         .fillColor(accent)
         .font('Helvetica-Bold')
         .fontSize(22)
-        .text(title, left, y, { width: width * 0.45 });
+        .text(title, left, y, { width: width * 0.48 });
     }
 
     doc
@@ -88,25 +92,7 @@ export async function buildInvoicePdf(input: InvoicePdfInput): Promise<Buffer> {
         align: 'right',
       });
 
-    y = Math.max(doc.y, headerTop + 70) + 8;
-
-    const contact = [
-      input.branding.companyLegalName || input.orgName,
-      input.branding.address,
-      input.branding.phone,
-      input.branding.email,
-      input.branding.website,
-    ]
-      .filter(Boolean)
-      .join(' · ');
-    if (contact) {
-      doc
-        .fillColor('#6b7280')
-        .font('Helvetica')
-        .fontSize(8)
-        .text(contact, left, y, { width });
-      y = doc.y + 10;
-    }
+    y = Math.max(doc.y, headerTop + (logoDrawn ? 78 : 40)) + 6;
 
     doc
       .moveTo(left, y)
@@ -115,6 +101,9 @@ export async function buildInvoicePdf(input: InvoicePdfInput): Promise<Buffer> {
       .strokeColor(accent)
       .stroke();
     y += 14;
+
+    const footerReserve = 88;
+    const contentBottom = doc.page.height - doc.page.margins.bottom - footerReserve;
 
     // Bill To | Bank Details
     const colW = width / 2 - 8;
@@ -235,7 +224,7 @@ export async function buildInvoicePdf(input: InvoicePdfInput): Promise<Buffer> {
           doc.heightOfString(t, { width: cols[i].w - 6 }),
         ),
       );
-      if (y + rowH > doc.page.height - 100) {
+      if (y + rowH > contentBottom - 60) {
         doc.addPage();
         y = doc.page.margins.top;
         drawHeader();
@@ -259,6 +248,10 @@ export async function buildInvoicePdf(input: InvoicePdfInput): Promise<Buffer> {
     });
 
     y += 10;
+    if (y > contentBottom - 54) {
+      doc.addPage();
+      y = doc.page.margins.top;
+    }
     doc
       .moveTo(left, y)
       .lineTo(right, y)
@@ -294,15 +287,101 @@ export async function buildInvoicePdf(input: InvoicePdfInput): Promise<Buffer> {
         align: 'right',
       });
 
-    if (input.branding.footer) {
-      y = doc.y + 18;
-      doc
-        .fillColor('#6b7280')
-        .font('Helvetica')
-        .fontSize(9)
-        .text(input.branding.footer, left, y, { width });
-    }
+    drawModernFooter(doc, {
+      left,
+      right,
+      width,
+      accent,
+      companyName:
+        input.branding.companyLegalName?.trim() || input.orgName.trim(),
+      address: input.branding.address?.trim() || '',
+      phone: input.branding.phone?.trim() || '',
+      email: input.branding.email?.trim() || '',
+      website: input.branding.website?.trim() || '',
+      note: input.branding.footer?.trim() || '',
+    });
 
     doc.end();
   });
+}
+
+function drawModernFooter(
+  doc: InstanceType<typeof PDFDocument>,
+  opts: {
+    left: number;
+    right: number;
+    width: number;
+    accent: string;
+    companyName: string;
+    address: string;
+    phone: string;
+    email: string;
+    website: string;
+    note: string;
+  },
+) {
+  const bottom = doc.page.height - doc.page.margins.bottom;
+  const footerTop = bottom - 72;
+  const colW = opts.width / 3;
+
+  // Soft band
+  doc.rect(opts.left, footerTop, opts.width, 72).fill('#f8fafc');
+  doc
+    .moveTo(opts.left, footerTop)
+    .lineTo(opts.right, footerTop)
+    .lineWidth(2)
+    .strokeColor(opts.accent)
+    .stroke();
+
+  let fy = footerTop + 10;
+  doc
+    .fillColor(opts.accent)
+    .font('Helvetica-Bold')
+    .fontSize(9)
+    .text(opts.companyName || "D' Educationist", opts.left + 8, fy, {
+      width: opts.width - 16,
+    });
+  fy = doc.y + 6;
+
+  const chips: Array<{ label: string; value: string }> = [
+    { label: 'Address', value: opts.address },
+    { label: 'Phone', value: opts.phone },
+    {
+      label: 'Contact',
+      value: [opts.email, opts.website].filter(Boolean).join('  ·  '),
+    },
+  ].filter((c) => Boolean(c.value));
+
+  if (chips.length) {
+    chips.forEach((chip, i) => {
+      const x = opts.left + 8 + i * colW;
+      doc
+        .fillColor('#9ca3af')
+        .font('Helvetica-Bold')
+        .fontSize(6.5)
+        .text(chip.label.toUpperCase(), x, fy, { width: colW - 12 });
+      doc
+        .fillColor('#374151')
+        .font('Helvetica')
+        .fontSize(7.5)
+        .text(chip.value, x, fy + 10, {
+          width: colW - 12,
+          lineBreak: true,
+          height: 22,
+        });
+    });
+  }
+
+  if (opts.note) {
+    doc
+      .fillColor('#6b7280')
+      .font('Helvetica-Oblique')
+      .fontSize(7)
+      .text(opts.note, opts.left + 8, bottom - 14, {
+        width: opts.width - 16,
+        align: 'center',
+        lineBreak: false,
+        ellipsis: true,
+      });
+  }
 }
