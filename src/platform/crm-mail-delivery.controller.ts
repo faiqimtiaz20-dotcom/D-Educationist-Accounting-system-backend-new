@@ -51,24 +51,30 @@ export class CrmMailDeliveryController {
       user.id,
     );
 
-    await this.audit.log({
-      userId: user.id,
-      tenantId: null,
-      action: 'UPDATE',
-      module: 'CRM',
-      entityType: 'PlatformSetting',
-      entityId: 'mail_delivery',
-      beforeData: {
-        mode: before.mode,
-        url: before.url,
-        apiKeyConfigured: before.apiKeyConfigured,
-      },
-      afterData: {
-        mode: after.mode,
-        url: after.url,
-        apiKeyConfigured: after.apiKeyConfigured,
-      },
-    });
+    try {
+      // entityId column is UUID — do not pass string keys like "mail_delivery"
+      await this.audit.log({
+        userId: user.id,
+        tenantId: null,
+        action: 'UPDATE',
+        module: 'CRM',
+        entityType: 'PlatformSetting',
+        beforeData: {
+          key: 'mail_delivery',
+          mode: before.mode,
+          url: before.url,
+          apiKeyConfigured: before.apiKeyConfigured,
+        },
+        afterData: {
+          key: 'mail_delivery',
+          mode: after.mode,
+          url: after.url,
+          apiKeyConfigured: after.apiKeyConfigured,
+        },
+      });
+    } catch {
+      // Settings already saved; audit must not fail the request
+    }
 
     return after;
   }
@@ -105,15 +111,22 @@ export class CrmMailDeliveryController {
       apiKey: relay.apiKey,
       to: dto.to,
     });
-    await this.audit.log({
-      userId: user.id,
-      tenantId: null,
-      action: 'CREATE',
-      module: 'CRM',
-      entityType: 'PlatformSetting',
-      entityId: 'mail_delivery_test',
-      afterData: { to: dto.to, messageId: result.messageId },
-    });
+    try {
+      await this.audit.log({
+        userId: user.id,
+        tenantId: null,
+        action: 'CREATE',
+        module: 'CRM',
+        entityType: 'PlatformSetting',
+        afterData: {
+          key: 'mail_delivery_test',
+          to: dto.to,
+          messageId: result.messageId,
+        },
+      });
+    } catch {
+      // ignore audit failure
+    }
     return { success: true, ...result };
   }
 }
