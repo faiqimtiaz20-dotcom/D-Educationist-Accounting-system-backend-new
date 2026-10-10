@@ -169,14 +169,17 @@ export class GlPostingService {
   private async nextEntryNo(tx: Tx) {
     const year = new Date().getFullYear();
     const prefix = `JE-${year}-`;
+    // Avoid loading the whole year of journals (was causing P2028 tx timeouts on send).
+    // Padded numeric suffixes sort lexicographically; skip non-numeric seed labels.
     const rows = await tx.journalEntry.findMany({
       where: { entryNo: { startsWith: prefix } },
       select: { entryNo: true },
+      orderBy: { entryNo: 'desc' },
+      take: 80,
     });
     let next = 1;
     for (const row of rows) {
       const suffix = row.entryNo.slice(prefix.length);
-      // Only count purely numeric suffixes (ignore seed labels like M7-PC01)
       if (/^\d+$/.test(suffix)) {
         const n = parseInt(suffix, 10);
         if (!Number.isNaN(n) && n >= next) next = n + 1;
@@ -212,6 +215,7 @@ export class GlPostingService {
 
     return tx.journalEntry.create({
       data: {
+        tenantId: currentTenantId(),
         entryNo,
         entryDate: input.entryDate,
         branchId: input.branchId,

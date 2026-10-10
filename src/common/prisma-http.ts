@@ -30,6 +30,12 @@ export function rethrowPrismaAsHttp(err: unknown): never {
     if (err.code === 'P2023') {
       throw new BadRequestException('Invalid identifier format');
     }
+    if (err.code === 'P2028') {
+      const detail = err.message.replace(/\s+/g, ' ').slice(0, 280);
+      throw new BadRequestException(
+        `Database transaction failed (P2028). Often a timeout while posting GL — retry once. ${detail}`,
+      );
+    }
     throw new BadRequestException(
       `Database error ${err.code}: ${err.message.slice(0, 200)}`,
     );
