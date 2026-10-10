@@ -1,4 +1,4 @@
-/** Tenant-controlled invoice letterhead + email templates. */
+/** Tenant-controlled invoice letterhead + email templates + bank block. */
 
 export type InvoiceBranding = {
   logoPath: string | null;
@@ -12,6 +12,15 @@ export type InvoiceBranding = {
   accentColor: string;
   emailSubject: string;
   emailBody: string;
+  /** Legal / account title shown on PDF bank block */
+  companyLegalName: string;
+  bankName: string;
+  bankBranch: string;
+  bankCity: string;
+  accountTitle: string;
+  accountNo: string;
+  swiftCode: string;
+  iban: string;
 };
 
 export const INVOICE_BRANDING_KEYS = {
@@ -25,6 +34,14 @@ export const INVOICE_BRANDING_KEYS = {
   accentColor: 'invoice_accent_color',
   emailSubject: 'invoice_email_subject',
   emailBody: 'invoice_email_body',
+  companyLegalName: 'invoice_company_legal_name',
+  bankName: 'invoice_bank_name',
+  bankBranch: 'invoice_bank_branch',
+  bankCity: 'invoice_bank_city',
+  accountTitle: 'invoice_account_title',
+  accountNo: 'invoice_account_no',
+  swiftCode: 'invoice_swift_code',
+  iban: 'invoice_iban',
 } as const;
 
 export const DEFAULT_INVOICE_BRANDING: Omit<
@@ -36,7 +53,7 @@ export const DEFAULT_INVOICE_BRANDING: Omit<
   email: '',
   website: '',
   footer: 'Thank you for your business.',
-  documentTitle: 'Commission Invoice',
+  documentTitle: 'INVOICE',
   accentColor: '#0f766e',
   emailSubject: 'Commission Invoice {{invoiceNo}}',
   emailBody:
@@ -45,6 +62,14 @@ export const DEFAULT_INVOICE_BRANDING: Omit<
     ' for {{students}}{{universities}}.\n\n' +
     'Total amount: {{amount}}.\n\n' +
     'Kind regards,\n{{orgName}}',
+  companyLegalName: '',
+  bankName: '',
+  bankBranch: '',
+  bankCity: '',
+  accountTitle: '',
+  accountNo: '',
+  swiftCode: '',
+  iban: '',
 };
 
 export type InvoiceTemplateVars = {
@@ -79,8 +104,15 @@ export function applyInvoiceTemplate(
 export type InvoiceHtmlLine = {
   studentName: string;
   studentCode?: string | null;
+  course?: string | null;
+  tuitionFee?: number;
   detail?: string | null;
   amount: number;
+};
+
+export type InvoiceBillTo = {
+  name: string;
+  lines: string[];
 };
 
 export function buildInvoiceHtml(input: {
@@ -93,8 +125,8 @@ export function buildInvoiceHtml(input: {
   lines: InvoiceHtmlLine[];
   total: number;
   paid?: number;
-  /** data:image/...;base64,... or empty */
   logoDataUrl?: string | null;
+  billTo?: InvoiceBillTo | null;
 }): string {
   const accent = input.branding.accentColor || '#0f766e';
   const fmt = (n: number) =>
@@ -113,77 +145,93 @@ export function buildInvoiceHtml(input: {
 
   const lineRows = input.lines
     .map(
-      (l) => `
+      (l, i) => `
       <tr>
-        <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">
-          <div style="font-weight:600;">${escapeHtml(l.studentName)}</div>
-          ${
-            l.detail
-              ? `<div style="color:#6b7280;font-size:12px;">${escapeHtml(l.detail)}</div>`
-              : ''
-          }
-        </td>
-        <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;text-align:right;white-space:nowrap;">
-          ${escapeHtml(fmt(l.amount))}
-        </td>
+        <td style="padding:8px 6px;border-bottom:1px solid #e5e7eb;">${i + 1}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid #e5e7eb;">${escapeHtml(l.studentName)}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid #e5e7eb;">${escapeHtml(l.course || '—')}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid #e5e7eb;text-align:right;">${escapeHtml(fmt(l.tuitionFee ?? 0))}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid #e5e7eb;text-align:right;">${escapeHtml(fmt(l.amount))}</td>
       </tr>`,
     )
     .join('');
+
+  const bankRows = [
+    ['Name of Bank', input.branding.bankName],
+    ['Branch', input.branding.bankBranch],
+    ['City', input.branding.bankCity],
+    [
+      'Account Title',
+      input.branding.accountTitle ||
+        input.branding.companyLegalName ||
+        input.orgName,
+    ],
+    ['Account No', input.branding.accountNo],
+    ['Swift Code', input.branding.swiftCode],
+    ['IBAN Code', input.branding.iban],
+  ]
+    .filter(([, v]) => Boolean(v))
+    .map(
+      ([k, v]) =>
+        `<div style="margin-bottom:4px;"><span style="color:#6b7280;">${escapeHtml(k)}:</span> ${escapeHtml(String(v))}</div>`,
+    )
+    .join('');
+
+  const billToHtml = input.billTo
+    ? `<div style="font-weight:700;margin-bottom:6px;">Bill To:</div>
+       <div style="font-weight:600;">${escapeHtml(input.billTo.name)}</div>
+       ${input.billTo.lines.map((l) => `<div>${escapeHtml(l)}</div>`).join('')}`
+    : '';
 
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8" /><title>${escapeHtml(input.invoiceNo)}</title></head>
 <body style="margin:0;padding:24px;background:#f8fafc;font-family:Segoe UI,Arial,sans-serif;color:#111827;">
-  <div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+  <div style="max-width:720px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
     <div style="padding:20px 24px;border-bottom:3px solid ${escapeHtml(accent)};">
-      <table width="100%" cellpadding="0" cellspacing="0"><tr>
-        <td style="vertical-align:middle;">
+      <table width="100%"><tr>
+        <td>
           ${
             input.logoDataUrl
-              ? `<img src="${input.logoDataUrl}" alt="Logo" style="max-height:64px;max-width:180px;object-fit:contain;" />`
-              : ''
+              ? `<img src="${input.logoDataUrl}" alt="Logo" style="max-height:64px;max-width:180px;" />`
+              : `<div style="font-size:22px;font-weight:700;">${escapeHtml(input.branding.documentTitle || 'INVOICE')}</div>`
           }
         </td>
-        <td style="text-align:right;vertical-align:middle;">
-          <div style="font-size:18px;font-weight:700;">${escapeHtml(input.orgName)}</div>
-          <div style="color:${escapeHtml(accent)};font-weight:600;margin-top:4px;">${escapeHtml(input.branding.documentTitle)}</div>
+        <td style="text-align:right;font-size:13px;">
+          <div><span style="color:#6b7280;">Invoice Number:</span> <strong>${escapeHtml(input.invoiceNo)}</strong></div>
+          <div style="margin-top:4px;"><span style="color:#6b7280;">Invoice Date:</span> <strong>${escapeHtml(input.invoiceDate)}</strong></div>
         </td>
       </tr></table>
       ${
         contactBits.length
-          ? `<div style="margin-top:12px;font-size:12px;color:#6b7280;line-height:1.5;">${contactBits
-              .map(escapeHtml)
-              .join(' · ')}</div>`
+          ? `<div style="margin-top:10px;font-size:12px;color:#6b7280;">${contactBits.map(escapeHtml).join(' · ')}</div>`
           : ''
       }
     </div>
     <div style="padding:20px 24px;">
-      <table width="100%" style="font-size:13px;margin-bottom:16px;">
-        <tr>
-          <td><span style="color:#6b7280;">Invoice No.</span><br/><strong>${escapeHtml(input.invoiceNo)}</strong></td>
-          <td><span style="color:#6b7280;">Date</span><br/><strong>${escapeHtml(input.invoiceDate)}</strong></td>
-          <td><span style="color:#6b7280;">Status</span><br/><strong>${escapeHtml(input.status)}</strong></td>
-        </tr>
-      </table>
-      <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;border-collapse:collapse;">
+      <table width="100%" style="font-size:13px;margin-bottom:18px;"><tr>
+        <td style="width:50%;vertical-align:top;padding-right:12px;">${billToHtml}</td>
+        <td style="width:50%;vertical-align:top;">
+          <div style="font-weight:700;margin-bottom:6px;">Bank Details</div>
+          ${bankRows || '<div style="color:#9ca3af;">Not configured in Settings → Invoice branding</div>'}
+        </td>
+      </tr></table>
+      <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;border-collapse:collapse;">
         <thead>
           <tr style="background:#f3f4f6;">
-            <th style="text-align:left;padding:8px 10px;">Student / Description</th>
-            <th style="text-align:right;padding:8px 10px;">Amount</th>
+            <th style="text-align:left;padding:8px 6px;">S.No</th>
+            <th style="text-align:left;padding:8px 6px;">Student Name</th>
+            <th style="text-align:left;padding:8px 6px;">Course</th>
+            <th style="text-align:right;padding:8px 6px;">Tuition Fee</th>
+            <th style="text-align:right;padding:8px 6px;">Due Commission</th>
           </tr>
         </thead>
         <tbody>${lineRows}</tbody>
       </table>
-      <div style="margin-top:16px;padding-top:12px;border-top:1px solid #e5e7eb;font-size:13px;">
-        <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-          <span>Total</span><strong>${escapeHtml(fmt(input.total))}</strong>
-        </div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:6px;color:#059669;">
-          <span>Paid</span><span>${escapeHtml(fmt(paid))}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;">
-          <span>Outstanding</span><span>${escapeHtml(fmt(outstanding))}</span>
-        </div>
+      <div style="margin-top:16px;text-align:right;font-size:14px;">
+        <div>Total (${escapeHtml(input.currency)}): <strong>${escapeHtml(fmt(input.total))}</strong></div>
+        <div style="color:#059669;margin-top:4px;">Paid: ${escapeHtml(fmt(paid))}</div>
+        <div style="font-weight:700;margin-top:4px;">Outstanding: ${escapeHtml(fmt(outstanding))}</div>
       </div>
       ${
         input.branding.footer
@@ -202,4 +250,31 @@ function escapeHtml(s: string) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** Cover-letter HTML for email body (plain text with newlines → paragraphs). */
+export function buildInvoiceEmailHtml(coverText: string): string {
+  const paragraphs = coverText
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map(
+      (p) =>
+        `<p style="margin:0 0 12px;line-height:1.5;color:#111827;font-size:14px;">${escapeHtml(
+          p,
+        ).replace(/\n/g, '<br/>')}</p>`,
+    )
+    .join('');
+
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /></head>
+<body style="margin:0;padding:24px;background:#f8fafc;font-family:Segoe UI,Arial,sans-serif;">
+  <div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:24px;">
+    ${paragraphs || '<p style="margin:0;">Please see the attached invoice.</p>'}
+    <p style="margin:16px 0 0;font-size:12px;color:#6b7280;">Invoice PDF is attached to this email.</p>
+  </div>
+</body>
+</html>`;
 }

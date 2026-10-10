@@ -22,18 +22,26 @@ import { MailService } from '../mail/mail.service';
 import { SettingsService } from '../settings/settings.service';
 import {
   applyInvoiceTemplate,
-  buildInvoiceHtml,
+  buildInvoiceEmailHtml,
 } from '../settings/invoice-branding';
+import { buildInvoicePdf } from '../settings/invoice-pdf';
 import { rethrowPrismaAsHttp } from '../common/prisma-http';
 
 const invoiceInclude = {
   lines: {
     include: {
-      student: { select: { id: true, studentCode: true, fullName: true } },
+      student: {
+        select: {
+          id: true,
+          studentCode: true,
+          fullName: true,
+          course: true,
+        },
+      },
     },
     orderBy: { lineNo: 'asc' as const },
   },
-  university: { select: { id: true, name: true } },
+  university: { select: { id: true, name: true, countryName: true } },
   branch: { select: { id: true, code: true, name: true } },
   receivables: {
     where: { isBulkRemittance: false },
@@ -450,7 +458,15 @@ export class InvoicesService {
         const text =
           email?.body?.trim() ||
           applyInvoiceTemplate(branding.emailBody, tplVars);
-        const html = buildInvoiceHtml({
+        // Email body = cover letter (form/template). Invoice goes as PDF attach.
+        const html = buildInvoiceEmailHtml(text);
+        const billTo = row.university
+          ? {
+              name: row.university.name,
+              lines: [row.university.countryName].filter(Boolean),
+            }
+          : null;
+        const pdf = await buildInvoicePdf({
           branding,
           orgName,
           invoiceNo: row.invoiceNo,
@@ -460,12 +476,15 @@ export class InvoicesService {
           lines: row.lines.map((l) => ({
             studentName: l.student?.fullName || l.studentId,
             studentCode: l.student?.studentCode,
+            course: l.student?.course ?? null,
+            tuitionFee: Number(l.tuitionFee),
             detail: undefined,
             amount: Number(l.commissionAmount),
           })),
           total,
           paid,
-          logoDataUrl: logo?.dataUrl ?? null,
+          logoBuffer: logo?.buffer ?? null,
+          billTo,
         });
         await this.mail.sendMail({
           to,
@@ -475,9 +494,9 @@ export class InvoicesService {
           html,
           attachments: [
             {
-              filename: `invoice-${row.invoiceNo}.html`,
-              content: Buffer.from(html, 'utf8'),
-              contentType: 'text/html',
+              filename: `invoice-${row.invoiceNo}.pdf`,
+              content: pdf,
+              contentType: 'application/pdf',
             },
           ],
         });

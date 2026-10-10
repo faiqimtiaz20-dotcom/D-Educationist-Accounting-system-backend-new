@@ -75,4 +75,44 @@ export class UpdateSettingsDto {
   @IsString()
   @MaxLength(4000)
   invoiceEmailBody?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  invoiceCompanyLegalName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  invoiceBankName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  invoiceBankBranch?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  invoiceBankCity?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  invoiceAccountTitle?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  invoiceAccountNo?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  invoiceSwiftCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  invoiceIban?: string;
 }

@@ -71,6 +71,14 @@ export class SettingsService {
       accentColor,
       emailSubject,
       emailBody,
+      companyLegalName,
+      bankName,
+      bankBranch,
+      bankCity,
+      accountTitle,
+      accountNo,
+      swiftCode,
+      iban,
     ] = await Promise.all([
       this.getValue<string | null>(KEYS.logoPath, null),
       this.getValue<string>(KEYS.address, DEFAULT_INVOICE_BRANDING.address),
@@ -91,6 +99,23 @@ export class SettingsService {
         DEFAULT_INVOICE_BRANDING.emailSubject,
       ),
       this.getValue<string>(KEYS.emailBody, DEFAULT_INVOICE_BRANDING.emailBody),
+      this.getValue<string>(
+        KEYS.companyLegalName,
+        DEFAULT_INVOICE_BRANDING.companyLegalName,
+      ),
+      this.getValue<string>(KEYS.bankName, DEFAULT_INVOICE_BRANDING.bankName),
+      this.getValue<string>(
+        KEYS.bankBranch,
+        DEFAULT_INVOICE_BRANDING.bankBranch,
+      ),
+      this.getValue<string>(KEYS.bankCity, DEFAULT_INVOICE_BRANDING.bankCity),
+      this.getValue<string>(
+        KEYS.accountTitle,
+        DEFAULT_INVOICE_BRANDING.accountTitle,
+      ),
+      this.getValue<string>(KEYS.accountNo, DEFAULT_INVOICE_BRANDING.accountNo),
+      this.getValue<string>(KEYS.swiftCode, DEFAULT_INVOICE_BRANDING.swiftCode),
+      this.getValue<string>(KEYS.iban, DEFAULT_INVOICE_BRANDING.iban),
     ]);
 
     const abs = logoPath ? this.resolveUploadPath(logoPath) : null;
@@ -106,6 +131,14 @@ export class SettingsService {
       accentColor: accentColor || DEFAULT_INVOICE_BRANDING.accentColor,
       emailSubject: emailSubject || DEFAULT_INVOICE_BRANDING.emailSubject,
       emailBody: emailBody || DEFAULT_INVOICE_BRANDING.emailBody,
+      companyLegalName: companyLegalName ?? '',
+      bankName: bankName ?? '',
+      bankBranch: bankBranch ?? '',
+      bankCity: bankCity ?? '',
+      accountTitle: accountTitle ?? '',
+      accountNo: accountNo ?? '',
+      swiftCode: swiftCode ?? '',
+      iban: iban ?? '',
     };
   }
 
@@ -234,6 +267,14 @@ export class SettingsService {
       ['invoiceAccentColor', KEYS.accentColor],
       ['invoiceEmailSubject', KEYS.emailSubject],
       ['invoiceEmailBody', KEYS.emailBody],
+      ['invoiceCompanyLegalName', KEYS.companyLegalName],
+      ['invoiceBankName', KEYS.bankName],
+      ['invoiceBankBranch', KEYS.bankBranch],
+      ['invoiceBankCity', KEYS.bankCity],
+      ['invoiceAccountTitle', KEYS.accountTitle],
+      ['invoiceAccountNo', KEYS.accountNo],
+      ['invoiceSwiftCode', KEYS.swiftCode],
+      ['invoiceIban', KEYS.iban],
     ];
     for (const [field, key] of brandMap) {
       const val = dto[field];
