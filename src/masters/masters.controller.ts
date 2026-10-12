@@ -173,11 +173,13 @@ export class MastersController {
   // ── Sub-agents ────────────────────────────────────────────────────────────
 
   @Get('sub-agents')
+  @RequirePermission(MODULE_CODES.SUB_AGENTS_PAYABLES, 'read')
   listSubAgents(@Query('includeInactive') includeInactive?: string) {
     return this.masters.listSubAgents(includeInactive === 'true');
   }
 
   @Get('sub-agents/:id')
+  @RequirePermission(MODULE_CODES.SUB_AGENTS_PAYABLES, 'read')
   getSubAgent(@Param('id') id: string) {
     return this.masters.getSubAgent(id);
   }
