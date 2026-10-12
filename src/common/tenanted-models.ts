@@ -14,6 +14,7 @@ export const TENANTED_PRISMA_MODELS = new Set([
   'Course',
   'UniversityCourseRate',
   'SubAgent',
+  'SubAgentCourseRate',
   'Vendor',
   'Student',
   'Invoice',

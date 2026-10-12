@@ -239,6 +239,7 @@ model Tenant {
   courses                Course[]
   universityCourseRates  UniversityCourseRate[]
   subAgents              SubAgent[]
+  subAgentCourseRates    SubAgentCourseRate[]
   vendors             Vendor[]
   students            Student[]
   invoices            Invoice[]
@@ -636,6 +637,7 @@ model Course {
   tenant          Tenant                 @relation(fields: [tenantId], references: [id])
   students        Student[]
   universityRates UniversityCourseRate[]
+  subAgentRates   SubAgentCourseRate[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -674,6 +676,7 @@ model SubAgent {
   accountTitle       String?   @map("account_title") @db.VarChar(160)
   iban               String?   @db.VarChar(34)
   accountNo          String?   @map("account_no") @db.VarChar(40)
+  /// Fallback commission % when no course-specific rate is set.
   defaultRatePercent Decimal?  @map("default_rate_percent") @db.Decimal(8, 4)
   isActive           Boolean   @default(true) @map("is_active")
   createdAt          DateTime  @default(now()) @map("created_at")
@@ -685,10 +688,32 @@ model SubAgent {
   students    Student[]
   commissions SubAgentCommission[]
   payments    SubAgentPayment[]
+  courseRates SubAgentCourseRate[]
 
   @@unique([tenantId, subAgentNo])
   @@index([tenantId])
   @@map("sub_agents")
+}
+
+/** Per-sub-agent commission % by course (fallback: SubAgent.defaultRatePercent). */
+model SubAgentCourseRate {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  subAgentId     String   @map("sub_agent_id") @db.Uuid
+  courseId       String   @map("course_id") @db.Uuid
+  commissionRate Decimal  @map("commission_rate") @db.Decimal(8, 4)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  subAgent SubAgent @relation(fields: [subAgentId], references: [id])
+  course   Course   @relation(fields: [courseId], references: [id])
+
+  @@unique([tenantId, subAgentId, courseId])
+  @@index([tenantId])
+  @@index([subAgentId])
+  @@index([courseId])
+  @@map("sub_agent_course_rates")
 }
 
 model Vendor {

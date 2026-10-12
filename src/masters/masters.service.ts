@@ -595,12 +595,39 @@ export class MastersService {
     return `SA-${String(next).padStart(3, '0')}`;
   }
 
+  private readonly subAgentInclude = {
+    courseRates: {
+      include: {
+        course: { select: { id: true, name: true, isActive: true } },
+      },
+      orderBy: { course: { name: 'asc' as const } },
+    },
+  } satisfies Prisma.SubAgentInclude;
+
+  private async syncSubAgentCourseRates(
+    tx: Prisma.TransactionClient,
+    subAgentId: string,
+    rates: Array<{ courseId: string; commissionRate: number }>,
+  ) {
+    await this.assertCourseIds(rates.map((r) => r.courseId));
+    await tx.subAgentCourseRate.deleteMany({ where: { subAgentId } });
+    if (rates.length === 0) return;
+    await tx.subAgentCourseRate.createMany({
+      data: rates.map((r) => ({
+        subAgentId,
+        courseId: r.courseId,
+        commissionRate: r.commissionRate,
+      })),
+    });
+  }
+
   listSubAgents(includeInactive = false) {
     return this.prisma.subAgent.findMany({
       where: {
         deletedAt: null,
         ...(includeInactive ? {} : { isActive: true }),
       },
+      include: this.subAgentInclude,
       orderBy: [{ subAgentNo: 'asc' }, { name: 'asc' }],
     });
   }
@@ -616,15 +643,19 @@ export class MastersService {
     }
     const row = await this.prisma.subAgent.findFirst({
       where: { id, deletedAt: null },
+      include: this.subAgentInclude,
     });
     if (!row) throw new NotFoundException('Sub-agent not found');
     return row;
   }
 
   async createSubAgent(dto: CreateSubAgentDto, actorId: string) {
+    if (dto.courseRates) {
+      await this.assertCourseIds(dto.courseRates.map((r) => r.courseId));
+    }
     const row = await this.prisma.$transaction(async (tx) => {
       const subAgentNo = await this.nextSubAgentNo(tx);
-      return tx.subAgent.create({
+      const created = await tx.subAgent.create({
         data: {
           subAgentNo,
           name: dto.name.trim(),
@@ -637,6 +668,13 @@ export class MastersService {
           defaultRatePercent: dto.defaultRatePercent,
           isActive: dto.isActive ?? true,
         },
+      });
+      if (dto.courseRates) {
+        await this.syncSubAgentCourseRates(tx, created.id, dto.courseRates);
+      }
+      return tx.subAgent.findFirstOrThrow({
+        where: { id: created.id },
+        include: this.subAgentInclude,
       });
     });
     await this.audit.log({
@@ -652,29 +690,41 @@ export class MastersService {
 
   async updateSubAgent(id: string, dto: UpdateSubAgentDto, actorId: string) {
     const before = await this.getSubAgent(id);
-    const row = await this.prisma.subAgent.update({
-      where: { id },
-      data: {
-        ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-        ...(dto.ntn !== undefined ? { ntn: dto.ntn?.trim() || null } : {}),
-        ...(dto.email !== undefined
-          ? { email: dto.email?.trim().toLowerCase() || null }
-          : {}),
-        ...(dto.contact !== undefined
-          ? { contact: dto.contact?.trim() || null }
-          : {}),
-        ...(dto.accountTitle !== undefined
-          ? { accountTitle: dto.accountTitle?.trim() || null }
-          : {}),
-        ...(dto.iban !== undefined ? { iban: dto.iban?.trim() || null } : {}),
-        ...(dto.accountNo !== undefined
-          ? { accountNo: dto.accountNo?.trim() || null }
-          : {}),
-        ...(dto.defaultRatePercent !== undefined
-          ? { defaultRatePercent: dto.defaultRatePercent }
-          : {}),
-        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
-      },
+    if (dto.courseRates) {
+      await this.assertCourseIds(dto.courseRates.map((r) => r.courseId));
+    }
+    const row = await this.prisma.$transaction(async (tx) => {
+      await tx.subAgent.update({
+        where: { id },
+        data: {
+          ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+          ...(dto.ntn !== undefined ? { ntn: dto.ntn?.trim() || null } : {}),
+          ...(dto.email !== undefined
+            ? { email: dto.email?.trim().toLowerCase() || null }
+            : {}),
+          ...(dto.contact !== undefined
+            ? { contact: dto.contact?.trim() || null }
+            : {}),
+          ...(dto.accountTitle !== undefined
+            ? { accountTitle: dto.accountTitle?.trim() || null }
+            : {}),
+          ...(dto.iban !== undefined ? { iban: dto.iban?.trim() || null } : {}),
+          ...(dto.accountNo !== undefined
+            ? { accountNo: dto.accountNo?.trim() || null }
+            : {}),
+          ...(dto.defaultRatePercent !== undefined
+            ? { defaultRatePercent: dto.defaultRatePercent }
+            : {}),
+          ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+        },
+      });
+      if (dto.courseRates) {
+        await this.syncSubAgentCourseRates(tx, id, dto.courseRates);
+      }
+      return tx.subAgent.findFirstOrThrow({
+        where: { id },
+        include: this.subAgentInclude,
+      });
     });
     await this.audit.log({
       userId: actorId,

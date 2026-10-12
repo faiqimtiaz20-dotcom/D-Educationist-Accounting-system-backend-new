@@ -181,6 +181,17 @@ export class UpdateCourseDto {
   isActive?: boolean;
 }
 
+export class SubAgentCourseRateItemDto {
+  @IsUUID()
+  courseId!: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  commissionRate!: number;
+}
+
 export class CreateSubAgentDto {
   @IsString()
   @MinLength(1)
@@ -212,6 +223,7 @@ export class CreateSubAgentDto {
   accountNo?: string;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   @Max(100)
@@ -220,6 +232,13 @@ export class CreateSubAgentDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  /** When set, replaces all course-specific rates for this sub-agent. */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SubAgentCourseRateItemDto)
+  courseRates?: SubAgentCourseRateItemDto[];
 }
 
 export class UpdateSubAgentDto {
@@ -253,6 +272,7 @@ export class UpdateSubAgentDto {
   accountNo?: string;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   @Max(100)
@@ -261,6 +281,13 @@ export class UpdateSubAgentDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  /** When set, replaces all course-specific rates for this sub-agent. */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SubAgentCourseRateItemDto)
+  courseRates?: SubAgentCourseRateItemDto[];
 }
 
 export class CreateVendorDto {
