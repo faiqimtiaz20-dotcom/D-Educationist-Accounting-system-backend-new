@@ -603,7 +603,10 @@ model University {
   vatNumber             String?   @map("vat_number") @db.VarChar(80)
   countryCode           String?   @map("country_code") @db.VarChar(2)
   countryName           String    @map("country_name") @db.VarChar(80)
+  /// USP / university commission fallback % (invoice / master sheet).
   defaultCommissionRate Decimal   @map("default_commission_rate") @db.Decimal(8, 4)
+  /// Agent commission fallback % (sub-agent commission sheet).
+  defaultAgentCommissionRate Decimal @default(0) @map("default_agent_commission_rate") @db.Decimal(8, 4)
   currencyCode          String    @map("currency_code") @db.Char(3)
   isActive              Boolean   @default(true) @map("is_active")
   createdAt             DateTime  @default(now()) @map("created_at")
@@ -644,15 +647,18 @@ model Course {
   @@map("courses")
 }
 
-/** Per-university commission % by course (fallback: University.defaultCommissionRate). */
+/** Per-university USP + agent commission % by course. */
 model UniversityCourseRate {
-  id             String   @id @default(uuid()) @db.Uuid
-  tenantId       String   @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
-  universityId   String   @map("university_id") @db.Uuid
-  courseId       String   @map("course_id") @db.Uuid
-  commissionRate Decimal  @map("commission_rate") @db.Decimal(8, 4)
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id                   String   @id @default(uuid()) @db.Uuid
+  tenantId             String   @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  universityId         String   @map("university_id") @db.Uuid
+  courseId             String   @map("course_id") @db.Uuid
+  /// USP / university commission % for this course.
+  commissionRate       Decimal  @map("commission_rate") @db.Decimal(8, 4)
+  /// Agent commission % for this course (sub-agent payout).
+  agentCommissionRate  Decimal  @default(0) @map("agent_commission_rate") @db.Decimal(8, 4)
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
 
   tenant     Tenant     @relation(fields: [tenantId], references: [id])
   university University @relation(fields: [universityId], references: [id])

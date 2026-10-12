@@ -126,7 +126,11 @@ export class MastersService {
   private async syncUniversityCourseRates(
     tx: Prisma.TransactionClient,
     universityId: string,
-    rates: Array<{ courseId: string; commissionRate: number }>,
+    rates: Array<{
+      courseId: string;
+      commissionRate: number;
+      agentCommissionRate?: number;
+    }>,
   ) {
     await this.assertCourseIds(rates.map((r) => r.courseId));
     await tx.universityCourseRate.deleteMany({ where: { universityId } });
@@ -136,6 +140,7 @@ export class MastersService {
         universityId,
         courseId: r.courseId,
         commissionRate: r.commissionRate,
+        agentCommissionRate: r.agentCommissionRate ?? 0,
       })),
     });
   }
@@ -168,6 +173,7 @@ export class MastersService {
           address: dto.address?.trim() || null,
           vatNumber: dto.vatNumber?.trim() || null,
           defaultCommissionRate: dto.defaultCommissionRate,
+          defaultAgentCommissionRate: dto.defaultAgentCommissionRate ?? 0,
           currencyCode: dto.currencyCode.toUpperCase(),
           isActive: dto.isActive ?? true,
         },
@@ -226,6 +232,9 @@ export class MastersService {
             : {}),
           ...(dto.defaultCommissionRate !== undefined
             ? { defaultCommissionRate: dto.defaultCommissionRate }
+            : {}),
+          ...(dto.defaultAgentCommissionRate !== undefined
+            ? { defaultAgentCommissionRate: dto.defaultAgentCommissionRate }
             : {}),
           ...(dto.currencyCode !== undefined
             ? { currencyCode: dto.currencyCode.toUpperCase() }
@@ -665,7 +674,7 @@ export class MastersService {
           accountTitle: dto.accountTitle?.trim() || null,
           iban: dto.iban?.trim() || null,
           accountNo: dto.accountNo?.trim() || null,
-          defaultRatePercent: dto.defaultRatePercent,
+          defaultRatePercent: dto.defaultRatePercent ?? null,
           isActive: dto.isActive ?? true,
         },
       });

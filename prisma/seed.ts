@@ -548,16 +548,16 @@ async function main() {
   }
 
   const universities = [
-    { universityNo: 'UNI-001', name: 'University of Manchester', countryName: 'UK', countryCode: 'GB', defaultCommissionRate: 15, currencyCode: 'GBP' },
-    { universityNo: 'UNI-002', name: 'Arizona State University', countryName: 'USA', countryCode: 'US', defaultCommissionRate: 12.5, currencyCode: 'USD' },
-    { universityNo: 'UNI-003', name: 'University of Toronto', countryName: 'Canada', countryCode: 'CA', defaultCommissionRate: 17.5, currencyCode: 'CAD' },
-    { universityNo: 'UNI-004', name: 'Monash University', countryName: 'Australia', countryCode: 'AU', defaultCommissionRate: 17.5, currencyCode: 'AUD' },
-    { universityNo: 'UNI-005', name: 'Coventry University', countryName: 'UK', countryCode: 'GB', defaultCommissionRate: 15, currencyCode: 'GBP' },
-    { universityNo: 'UNI-006', name: 'Northeastern University', countryName: 'USA', countryCode: 'US', defaultCommissionRate: 10, currencyCode: 'USD' },
-    { universityNo: 'UNI-007', name: 'University of Birmingham', countryName: 'UK', countryCode: 'GB', defaultCommissionRate: 15, currencyCode: 'GBP' },
-    { universityNo: 'UNI-008', name: 'McGill University', countryName: 'Canada', countryCode: 'CA', defaultCommissionRate: 12.5, currencyCode: 'CAD' },
-    { universityNo: 'UNI-009', name: 'University of Melbourne', countryName: 'Australia', countryCode: 'AU', defaultCommissionRate: 17.5, currencyCode: 'AUD' },
-    { universityNo: 'UNI-010', name: 'University of Leeds', countryName: 'UK', countryCode: 'GB', defaultCommissionRate: 15, currencyCode: 'GBP' },
+    { universityNo: 'UNI-001', name: 'University of Manchester', countryName: 'UK', countryCode: 'GB', defaultCommissionRate: 15, defaultAgentCommissionRate: 12, currencyCode: 'GBP' },
+    { universityNo: 'UNI-002', name: 'Arizona State University', countryName: 'USA', countryCode: 'US', defaultCommissionRate: 12.5, defaultAgentCommissionRate: 10, currencyCode: 'USD' },
+    { universityNo: 'UNI-003', name: 'University of Toronto', countryName: 'Canada', countryCode: 'CA', defaultCommissionRate: 17.5, defaultAgentCommissionRate: 14, currencyCode: 'CAD' },
+    { universityNo: 'UNI-004', name: 'Monash University', countryName: 'Australia', countryCode: 'AU', defaultCommissionRate: 17.5, defaultAgentCommissionRate: 14, currencyCode: 'AUD' },
+    { universityNo: 'UNI-005', name: 'Coventry University', countryName: 'UK', countryCode: 'GB', defaultCommissionRate: 15, defaultAgentCommissionRate: 12, currencyCode: 'GBP' },
+    { universityNo: 'UNI-006', name: 'Northeastern University', countryName: 'USA', countryCode: 'US', defaultCommissionRate: 10, defaultAgentCommissionRate: 8, currencyCode: 'USD' },
+    { universityNo: 'UNI-007', name: 'University of Birmingham', countryName: 'UK', countryCode: 'GB', defaultCommissionRate: 15, defaultAgentCommissionRate: 12, currencyCode: 'GBP' },
+    { universityNo: 'UNI-008', name: 'McGill University', countryName: 'Canada', countryCode: 'CA', defaultCommissionRate: 12.5, defaultAgentCommissionRate: 10, currencyCode: 'CAD' },
+    { universityNo: 'UNI-009', name: 'University of Melbourne', countryName: 'Australia', countryCode: 'AU', defaultCommissionRate: 17.5, defaultAgentCommissionRate: 14, currencyCode: 'AUD' },
+    { universityNo: 'UNI-010', name: 'University of Leeds', countryName: 'UK', countryCode: 'GB', defaultCommissionRate: 15, defaultAgentCommissionRate: 12, currencyCode: 'GBP' },
   ];
   for (const u of universities) {
     const existing = await prisma.university.findFirst({
@@ -574,12 +574,12 @@ async function main() {
   }
 
   const subAgents = [
-    { subAgentNo: 'SA-001', name: 'Global Edu Partners', ntn: '1234567-8', email: 'contact@globaledu.pk', contact: '+92 300 1112233', accountTitle: 'Global Edu Partners', iban: 'PK36SCBL0000001123456702', accountNo: '0123456702', defaultRatePercent: 10 },
-    { subAgentNo: 'SA-002', name: 'Study Link Associates', ntn: '2345678-9', email: 'info@studylink.pk', contact: '+92 321 2223344', accountTitle: 'Study Link Associates', iban: 'PK36HABB0000002234567803', accountNo: '0234567803', defaultRatePercent: 8 },
-    { subAgentNo: 'SA-003', name: 'Overseas Connect', ntn: '3456789-0', email: 'hello@overseasconnect.pk', contact: '+92 333 3334455', accountTitle: 'Overseas Connect Pvt Ltd', iban: 'PK36MEZN0000003345678904', accountNo: '0345678904', defaultRatePercent: 12 },
-    { subAgentNo: 'SA-004', name: 'Future Path Consultants', ntn: '4567890-1', email: 'admin@futurepath.pk', contact: '+92 345 4445566', accountTitle: 'Future Path Consultants', iban: 'PK36UNIL0000004456789015', accountNo: '0456789015', defaultRatePercent: 10 },
-    { subAgentNo: 'SA-005', name: 'EduBridge Pakistan', ntn: '5678901-2', email: 'support@edubridge.pk', contact: '+92 300 5556677', accountTitle: 'EduBridge Pakistan', iban: 'PK36SCBL0000005567890126', accountNo: '0567890126', defaultRatePercent: 7.5 },
-    { subAgentNo: 'SA-006', name: 'Horizon Study Abroad', ntn: '6789012-3', email: 'team@horizonstudy.pk', contact: '+92 321 6667788', accountTitle: 'Horizon Study Abroad', iban: 'PK36HABB0000006678901237', accountNo: '0678901237', defaultRatePercent: 9 },
+    { subAgentNo: 'SA-001', name: 'Global Edu Partners', ntn: '1234567-8', email: 'contact@globaledu.pk', contact: '+92 300 1112233', accountTitle: 'Global Edu Partners', iban: 'PK36SCBL0000001123456702', accountNo: '0123456702' },
+    { subAgentNo: 'SA-002', name: 'Study Link Associates', ntn: '2345678-9', email: 'info@studylink.pk', contact: '+92 321 2223344', accountTitle: 'Study Link Associates', iban: 'PK36HABB0000002234567803', accountNo: '0234567803' },
+    { subAgentNo: 'SA-003', name: 'Overseas Connect', ntn: '3456789-0', email: 'hello@overseasconnect.pk', contact: '+92 333 3334455', accountTitle: 'Overseas Connect Pvt Ltd', iban: 'PK36MEZN0000003345678904', accountNo: '0345678904' },
+    { subAgentNo: 'SA-004', name: 'Future Path Consultants', ntn: '4567890-1', email: 'admin@futurepath.pk', contact: '+92 345 4445566', accountTitle: 'Future Path Consultants', iban: 'PK36UNIL0000004456789015', accountNo: '0456789015' },
+    { subAgentNo: 'SA-005', name: 'EduBridge Pakistan', ntn: '5678901-2', email: 'support@edubridge.pk', contact: '+92 300 5556677', accountTitle: 'EduBridge Pakistan', iban: 'PK36SCBL0000005567890126', accountNo: '0567890126' },
+    { subAgentNo: 'SA-006', name: 'Horizon Study Abroad', ntn: '6789012-3', email: 'team@horizonstudy.pk', contact: '+92 321 6667788', accountTitle: 'Horizon Study Abroad', iban: 'PK36HABB0000006678901237', accountNo: '0678901237' },
   ];
   for (const s of subAgents) {
     const existing = await prisma.subAgent.findFirst({
@@ -723,14 +723,15 @@ async function main() {
     universityName: string;
     courseName: string;
     commissionRate: number;
+    agentCommissionRate: number;
   }> = [
-    { universityName: 'University of Manchester', courseName: 'MSc Data Science', commissionRate: 15 },
-    { universityName: 'University of Manchester', courseName: 'MBA', commissionRate: 12 },
-    { universityName: 'Arizona State University', courseName: 'BSc Computer Science', commissionRate: 12.5 },
-    { universityName: 'Arizona State University', courseName: 'MBA', commissionRate: 10 },
-    { universityName: 'University of Toronto', courseName: 'MBA', commissionRate: 17.5 },
-    { universityName: 'Coventry University', courseName: 'BA Business', commissionRate: 18 },
-    { universityName: 'Monash University', courseName: 'MEng Civil', commissionRate: 17.5 },
+    { universityName: 'University of Manchester', courseName: 'MSc Data Science', commissionRate: 15, agentCommissionRate: 12 },
+    { universityName: 'University of Manchester', courseName: 'MBA', commissionRate: 12, agentCommissionRate: 10 },
+    { universityName: 'Arizona State University', courseName: 'BSc Computer Science', commissionRate: 12.5, agentCommissionRate: 10 },
+    { universityName: 'Arizona State University', courseName: 'MBA', commissionRate: 10, agentCommissionRate: 8 },
+    { universityName: 'University of Toronto', courseName: 'MBA', commissionRate: 17.5, agentCommissionRate: 14 },
+    { universityName: 'Coventry University', courseName: 'BA Business', commissionRate: 18, agentCommissionRate: 15 },
+    { universityName: 'Monash University', courseName: 'MEng Civil', commissionRate: 17.5, agentCommissionRate: 14 },
   ];
   for (const r of courseRateSeed) {
     const uni = uniByName[r.universityName];
@@ -749,49 +750,18 @@ async function main() {
         universityId: uni.id,
         courseId: course.id,
         commissionRate: r.commissionRate,
+        agentCommissionRate: r.agentCommissionRate,
       },
-      update: { commissionRate: r.commissionRate },
+      update: {
+        commissionRate: r.commissionRate,
+        agentCommissionRate: r.agentCommissionRate,
+      },
     });
   }
 
   const subAgentsDb = await prisma.subAgent.findMany({
     where: { deletedAt: null },
   });
-  const subAgentByName = Object.fromEntries(subAgentsDb.map((a) => [a.name, a]));
-
-  // Sample agent × course commission rates (others fall back to defaultRatePercent)
-  const agentCourseRateSeed: Array<{
-    subAgentName: string;
-    courseName: string;
-    commissionRate: number;
-  }> = [
-    { subAgentName: 'Global Edu Partners', courseName: 'MSc Data Science', commissionRate: 12 },
-    { subAgentName: 'Global Edu Partners', courseName: 'MBA', commissionRate: 8 },
-    { subAgentName: 'Study Link Associates', courseName: 'BSc Computer Science', commissionRate: 9 },
-    { subAgentName: 'Overseas Connect', courseName: 'BA Business', commissionRate: 11 },
-    { subAgentName: 'EduBridge Pakistan', courseName: 'MEng Civil', commissionRate: 6.5 },
-  ];
-  for (const r of agentCourseRateSeed) {
-    const agent = subAgentByName[r.subAgentName];
-    const course = courseByName[r.courseName];
-    if (!agent || !course) continue;
-    await prisma.subAgentCourseRate.upsert({
-      where: {
-        tenantId_subAgentId_courseId: {
-          tenantId: DEFAULT_TENANT_ID,
-          subAgentId: agent.id,
-          courseId: course.id,
-        },
-      },
-      create: {
-        tenantId: DEFAULT_TENANT_ID,
-        subAgentId: agent.id,
-        courseId: course.id,
-        commissionRate: r.commissionRate,
-      },
-      update: { commissionRate: r.commissionRate },
-    });
-  }
   const khi = branchByCode.KHI;
   const lhr = branchByCode.LHR;
 

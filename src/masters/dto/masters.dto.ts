@@ -24,6 +24,13 @@ export class UniversityCourseRateItemDto {
   @Min(0)
   @Max(100)
   commissionRate!: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  agentCommissionRate?: number;
 }
 
 export class CreateUniversityDto {
@@ -57,6 +64,13 @@ export class CreateUniversityDto {
   @Min(0)
   @Max(100)
   defaultCommissionRate!: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  defaultAgentCommissionRate?: number;
 
   @IsString()
   @MinLength(3)
@@ -140,6 +154,13 @@ export class UpdateUniversityDto {
   @Min(0)
   @Max(100)
   defaultCommissionRate?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  defaultAgentCommissionRate?: number;
 
   @IsOptional()
   @IsString()
