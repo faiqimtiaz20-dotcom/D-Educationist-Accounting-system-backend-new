@@ -28,9 +28,6 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "import:usp-uk": "tsx scripts/import-usp-uk-sheet.ts"
   },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
-  },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^12.0.1",
