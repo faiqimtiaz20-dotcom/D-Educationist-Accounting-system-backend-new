@@ -79,18 +79,6 @@ export class CreateInvoiceDto {
   @IsString()
   notes?: string;
 
-  /** When set with universityId, updates university Bill To address (invoice PDF). */
-  @IsOptional()
-  @IsString()
-  @MaxLength(1000)
-  universityAddress?: string | null;
-
-  /** When set with universityId, updates university VAT number (invoice PDF). */
-  @IsOptional()
-  @IsString()
-  @MaxLength(80)
-  universityVatNumber?: string | null;
-
   @IsArray()
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
@@ -102,16 +90,6 @@ export class UpdateInvoiceDto {
   @IsOptional()
   @IsUUID()
   universityId?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(1000)
-  universityAddress?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(80)
-  universityVatNumber?: string | null;
 
   @IsOptional()
   @IsString()

@@ -8,10 +8,8 @@ import {
   Post,
   Query,
   Req,
-  Res,
-  StreamableFile,
 } from '@nestjs/common';
-import type { Request, Response } from 'express';
+import type { Request } from 'express';
 import { InvoiceStatus } from '@prisma/client';
 import { InvoicesService } from './invoices.service';
 import { OtherInvoicesService } from './other-invoices.service';
@@ -89,26 +87,6 @@ export class RevenueController {
     @Req() req: Request,
   ) {
     return this.invoices.update(id, dto, user, this.scope(user, req));
-  }
-
-  @Get('invoices/:id/pdf')
-  @RequirePermission(MODULE_CODES.INVOICES_RECEIVABLES, 'read')
-  async downloadInvoicePdf(
-    @Param('id') id: string,
-    @CurrentUser() user: AuthUserPayload,
-    @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const { buffer, filename } = await this.invoices.buildPdf(
-      id,
-      this.scope(user, req),
-    );
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${filename.replace(/"/g, '')}"`,
-    );
-    return new StreamableFile(buffer);
   }
 
   @Post('invoices/:id/send')
