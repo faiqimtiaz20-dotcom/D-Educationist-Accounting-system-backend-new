@@ -37,6 +37,11 @@ export class CreatePettyCashDto {
   @IsEnum(PettyCashEntryType)
   entryType!: PettyCashEntryType;
 
+  /** Required when entryType is `in` — bank that funds the top-up. */
+  @IsOptional()
+  @IsUUID()
+  bankAccountId?: string;
+
   @Type(() => Number)
   @IsNumber()
   @Min(0)

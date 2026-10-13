@@ -944,6 +944,7 @@ model BankAccount {
   cheques          Cheque[]
   contraFrom       ContraEntry[]     @relation("ContraFromBank")
   contraTo         ContraEntry[]     @relation("ContraToBank")
+  pettyCashEntries PettyCashEntry[]
 
   @@index([tenantId])
   @@index([branchId])
@@ -1077,33 +1078,37 @@ model SubAgentPayment {
 // ─── Cash / expenses / bank ───────────────────────────────────────────────────
 
 model PettyCashEntry {
-  id          String             @id @default(uuid()) @db.Uuid
-  tenantId    String             @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
-  pettyCashNo String             @map("petty_cash_no") @db.VarChar(40)
-  branchId    String             @map("branch_id") @db.Uuid
-  entryDate   DateTime           @map("entry_date") @db.Date
-  categoryId  String             @map("category_id") @db.Uuid
-  description String
-  entryType   PettyCashEntryType @map("entry_type")
-  principal   Decimal            @db.Decimal(18, 2)
-  salesTax    Decimal            @default(0) @map("sales_tax") @db.Decimal(18, 2)
-  srbSst      Decimal            @default(0) @map("srb_sst") @db.Decimal(18, 2)
-  gst         Decimal            @default(0) @db.Decimal(18, 2)
-  incomeTax   Decimal            @default(0) @map("income_tax") @db.Decimal(18, 2)
-  total       Decimal            @db.Decimal(18, 2)
-  createdById String?            @map("created_by") @db.Uuid
-  createdAt   DateTime           @default(now()) @map("created_at")
-  updatedAt   DateTime           @updatedAt @map("updated_at")
+  id            String             @id @default(uuid()) @db.Uuid
+  tenantId      String             @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  pettyCashNo   String             @map("petty_cash_no") @db.VarChar(40)
+  branchId      String             @map("branch_id") @db.Uuid
+  entryDate     DateTime           @map("entry_date") @db.Date
+  categoryId    String             @map("category_id") @db.Uuid
+  description   String
+  entryType     PettyCashEntryType @map("entry_type")
+  /** Required for Cash In — bank that funds the imprest top-up. */
+  bankAccountId String?            @map("bank_account_id") @db.Uuid
+  principal     Decimal            @db.Decimal(18, 2)
+  salesTax      Decimal            @default(0) @map("sales_tax") @db.Decimal(18, 2)
+  srbSst        Decimal            @default(0) @map("srb_sst") @db.Decimal(18, 2)
+  gst           Decimal            @default(0) @db.Decimal(18, 2)
+  incomeTax     Decimal            @default(0) @map("income_tax") @db.Decimal(18, 2)
+  total         Decimal            @db.Decimal(18, 2)
+  createdById   String?            @map("created_by") @db.Uuid
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
-  branch    Branch            @relation(fields: [branchId], references: [id])
-  category  PettyCashCategory @relation(fields: [categoryId], references: [id])
-  createdBy User?             @relation("PettyCashCreatedBy", fields: [createdById], references: [id])
+  branch      Branch            @relation(fields: [branchId], references: [id])
+  category    PettyCashCategory @relation(fields: [categoryId], references: [id])
+  bankAccount BankAccount?      @relation(fields: [bankAccountId], references: [id])
+  createdBy   User?             @relation("PettyCashCreatedBy", fields: [createdById], references: [id])
 
   @@unique([tenantId, pettyCashNo])
   @@index([tenantId])
   @@index([branchId, entryDate])
+  @@index([bankAccountId])
   @@map("petty_cash_entries")
 }
 

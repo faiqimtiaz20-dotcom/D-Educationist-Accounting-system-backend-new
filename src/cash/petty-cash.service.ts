@@ -20,6 +20,7 @@ import { nextBranchYearNo } from '../common/document-numbers';
 const include = {
   category: { select: { id: true, name: true } },
   branch: { select: { id: true, code: true, name: true } },
+  bankAccount: { select: { id: true, name: true, bankName: true, accountNo: true } },
 } satisfies Prisma.PettyCashEntryInclude;
 
 @Injectable()
@@ -85,6 +86,26 @@ export class PettyCashService {
     return round2(balance);
   }
 
+  /** Sub-ledger balance for one bank account. */
+  private async bankAccountBalance(bankAccountId: string): Promise<number> {
+    const account = await this.prisma.bankAccount.findFirst({
+      where: { id: bankAccountId, deletedAt: null },
+    });
+    if (!account) throw new BadRequestException('Invalid bank account');
+    const aggs = await this.prisma.bankTransaction.groupBy({
+      by: ['txnType'],
+      where: { bankAccountId },
+      _sum: { amount: true },
+    });
+    let movement = 0;
+    for (const g of aggs) {
+      const sum = Number(g._sum.amount ?? 0);
+      if (g.txnType === 'deposit') movement += sum;
+      else movement -= sum;
+    }
+    return round2(Number(account.openingBalance) + movement);
+  }
+
   list(scope: RequestBranchScope) {
     return this.prisma.pettyCashEntry.findMany({
       where: scope.allBranches ? {} : { branchId: scope.branchId! },
@@ -123,6 +144,40 @@ export class PettyCashService {
       throw new BadRequestException('Total must be greater than zero');
     }
 
+    let bankAccountId: string | null = null;
+    if (dto.entryType === 'in') {
+      if (!dto.bankAccountId) {
+        throw new BadRequestException(
+          'bankAccountId is required for Cash In (top-up from bank)',
+        );
+      }
+      const bank = await this.prisma.bankAccount.findFirst({
+        where: {
+          id: dto.bankAccountId,
+          deletedAt: null,
+          isActive: true,
+        },
+      });
+      if (!bank) throw new BadRequestException('Invalid bank account');
+      if (bank.branchId !== branchId) {
+        throw new BadRequestException(
+          'Bank account must belong to the same branch as the petty cash entry',
+        );
+      }
+      this.assertBranch(scope, bank.branchId);
+      const bankBal = await this.bankAccountBalance(bank.id);
+      if (amounts.total > bankBal + 1e-9) {
+        throw new BadRequestException(
+          `Top-up ${amounts.total} exceeds bank balance ${bankBal} on ${bank.name}`,
+        );
+      }
+      bankAccountId = bank.id;
+    } else if (dto.bankAccountId) {
+      throw new BadRequestException(
+        'bankAccountId is only allowed on Cash In entries',
+      );
+    }
+
     if (dto.entryType === 'out') {
       const balance = await this.branchBalance(branchId);
       if (amounts.total > balance + 1e-9) {
@@ -146,6 +201,7 @@ export class PettyCashService {
           categoryId: dto.categoryId,
           description: dto.description.trim(),
           entryType: dto.entryType,
+          bankAccountId,
           principal: amounts.principal,
           salesTax: amounts.salesTax,
           srbSst: amounts.srbSst,
@@ -169,6 +225,23 @@ export class PettyCashService {
         categoryLabel: category.name,
         actorId: user.id,
       });
+
+      // Sub-ledger: reduce the selected bank so multi-bank balances stay correct.
+      if (dto.entryType === 'in' && bankAccountId) {
+        await tx.bankTransaction.create({
+          data: {
+            bankAccountId,
+            txnDate: entryDate,
+            txnType: 'withdrawal',
+            description: `Petty cash top-up ${pettyCashNo}`,
+            amount: amounts.total,
+            currencyCode: 'PKR',
+            reconciliationStatus: 'Unmatched',
+            sourceType: 'PettyCash',
+            sourceId: entry.id,
+          },
+        });
+      }
 
       return entry;
     });
