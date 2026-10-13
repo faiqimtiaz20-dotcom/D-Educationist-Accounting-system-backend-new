@@ -14,8 +14,12 @@ import { runGlTransaction } from '../common/gl-transaction';
 import type { AuthUserPayload } from '../common/decorators';
 import type { RequestBranchScope } from '../common/branch-scope.interceptor';
 import { resolveWritableBranchId } from '../common/branch-scope';
+import { canTopUpPettyCash } from '../common/rbac';
 import { CreatePettyCashDto, UpdatePettyCashDto } from './dto/cash.dto';
 import { nextBranchYearNo } from '../common/document-numbers';
+
+/** System category for Cash In (imprest top-up). Not shown in the Cash In form. */
+export const PETTY_CASH_TOPUP_CATEGORY = 'Imprest top-up';
 
 const include = {
   category: { select: { id: true, name: true } },
@@ -86,6 +90,33 @@ export class PettyCashService {
     return round2(balance);
   }
 
+  /** Ensure the system Cash In category exists for this tenant. */
+  private async ensureTopUpCategory() {
+    const existing = await this.prisma.pettyCashCategory.findFirst({
+      where: { name: PETTY_CASH_TOPUP_CATEGORY },
+    });
+    if (existing) {
+      if (!existing.isActive) {
+        return this.prisma.pettyCashCategory.update({
+          where: { id: existing.id },
+          data: { isActive: true },
+        });
+      }
+      return existing;
+    }
+    try {
+      return await this.prisma.pettyCashCategory.create({
+        data: { name: PETTY_CASH_TOPUP_CATEGORY, isActive: true },
+      });
+    } catch {
+      const again = await this.prisma.pettyCashCategory.findFirst({
+        where: { name: PETTY_CASH_TOPUP_CATEGORY },
+      });
+      if (!again) throw new BadRequestException('Failed to create top-up category');
+      return again;
+    }
+  }
+
   /** Sub-ledger balance for one bank account. */
   private async bankAccountBalance(bankAccountId: string): Promise<number> {
     const account = await this.prisma.bankAccount.findFirst({
@@ -134,18 +165,23 @@ export class PettyCashService {
     const entryDate = this.parseDate(dto.entryDate);
     await this.fiscal.assertNotLocked(entryDate);
 
-    const category = await this.prisma.pettyCashCategory.findFirst({
-      where: { id: dto.categoryId, isActive: true },
-    });
-    if (!category) throw new BadRequestException('Invalid category');
-
-    const amounts = this.totals(dto);
-    if (amounts.total <= 0) {
-      throw new BadRequestException('Total must be greater than zero');
-    }
+    let category: { id: string; name: string };
+    let amounts: ReturnType<PettyCashService['totals']>;
 
     let bankAccountId: string | null = null;
+
     if (dto.entryType === 'in') {
+      if (!canTopUpPettyCash(user.roleCode, user.branchIsHeadOffice)) {
+        throw new ForbiddenException(
+          'Only Tenant Admin or Head Office Branch Manager / Accountant can top up petty cash (Cash In)',
+        );
+      }
+      // Cash In is a plain float top-up: no category picker, no taxes.
+      category = await this.ensureTopUpCategory();
+      amounts = this.totals({ principal: dto.principal });
+      if (amounts.total <= 0) {
+        throw new BadRequestException('Amount must be greater than zero');
+      }
       if (!dto.bankAccountId) {
         throw new BadRequestException(
           'bankAccountId is required for Cash In (top-up from bank)',
@@ -172,13 +208,24 @@ export class PettyCashService {
         );
       }
       bankAccountId = bank.id;
-    } else if (dto.bankAccountId) {
-      throw new BadRequestException(
-        'bankAccountId is only allowed on Cash In entries',
-      );
-    }
-
-    if (dto.entryType === 'out') {
+    } else {
+      if (!dto.categoryId) {
+        throw new BadRequestException('categoryId is required for Cash Out');
+      }
+      if (dto.bankAccountId) {
+        throw new BadRequestException(
+          'bankAccountId is only allowed on Cash In entries',
+        );
+      }
+      const cat = await this.prisma.pettyCashCategory.findFirst({
+        where: { id: dto.categoryId, isActive: true },
+      });
+      if (!cat) throw new BadRequestException('Invalid category');
+      category = cat;
+      amounts = this.totals(dto);
+      if (amounts.total <= 0) {
+        throw new BadRequestException('Total must be greater than zero');
+      }
       const balance = await this.branchBalance(branchId);
       if (amounts.total > balance + 1e-9) {
         throw new BadRequestException(
@@ -198,7 +245,7 @@ export class PettyCashService {
           pettyCashNo,
           branchId,
           entryDate,
-          categoryId: dto.categoryId,
+          categoryId: category.id,
           description: dto.description.trim(),
           entryType: dto.entryType,
           bankAccountId,
@@ -286,6 +333,16 @@ export class PettyCashService {
         where: { id: dto.categoryId, isActive: true },
       });
       if (!cat) throw new BadRequestException('Invalid category');
+    }
+
+    const nextType = dto.entryType ?? before.entryType;
+    if (
+      nextType === 'in' &&
+      !canTopUpPettyCash(user.roleCode, user.branchIsHeadOffice)
+    ) {
+      throw new ForbiddenException(
+        'Only Tenant Admin or Head Office Branch Manager / Accountant can top up petty cash (Cash In)',
+      );
     }
 
     const amounts = this.totals({

@@ -73,6 +73,17 @@ export function canAccessAllTenantBranches(
   return Boolean(branchIsHeadOffice) && isHeadOfficeAllBranchesRole(roleCode);
 }
 
+/**
+ * Petty cash Cash In (imprest top-up from bank): Tenant Admin, or Head Office
+ * Branch Manager / Accountant only. Branch staff may only post Cash Out.
+ */
+export function canTopUpPettyCash(
+  roleCode: string,
+  branchIsHeadOffice?: boolean | null,
+) {
+  return canAccessAllTenantBranches(roleCode, branchIsHeadOffice);
+}
+
 /** @deprecated Use isTenantAdminRole — kept for call-site compatibility. */
 export function isSuperAdminRole(roleCode: string) {
   return isTenantAdminRole(roleCode);

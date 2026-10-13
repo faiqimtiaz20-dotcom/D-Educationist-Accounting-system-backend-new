@@ -26,8 +26,10 @@ export class CreatePettyCashDto {
   @IsString()
   entryDate!: string;
 
+  /** Required for Cash Out. Cash In uses the system "Imprest top-up" category. */
+  @IsOptional()
   @IsUUID()
-  categoryId!: string;
+  categoryId?: string;
 
   @IsString()
   @MinLength(1)
