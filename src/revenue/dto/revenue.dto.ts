@@ -52,6 +52,16 @@ export class CreateInvoiceDto {
   @IsUUID()
   universityId?: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  billToAddress?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  billToVatNumber?: string | null;
+
   @IsString()
   invoiceDate!: string;
 
@@ -90,6 +100,16 @@ export class UpdateInvoiceDto {
   @IsOptional()
   @IsUUID()
   universityId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  billToAddress?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  billToVatNumber?: string | null;
 
   @IsOptional()
   @IsString()

@@ -187,6 +187,8 @@ export class InvoicesService {
           invoiceNo,
           branchId,
           universityId: dto.universityId || null,
+          billToAddress: dto.billToAddress?.trim() || null,
+          billToVatNumber: dto.billToVatNumber?.trim() || null,
           invoiceDate,
           poNumber: dto.poNumber?.trim() || null,
           currencyCode: dto.currencyCode.toUpperCase(),
@@ -337,6 +339,12 @@ export class InvoicesService {
               ...(dto.universityId !== undefined
                 ? { universityId: dto.universityId || null }
                 : {}),
+              ...(dto.billToAddress !== undefined
+                ? { billToAddress: dto.billToAddress?.trim() || null }
+                : {}),
+              ...(dto.billToVatNumber !== undefined
+                ? { billToVatNumber: dto.billToVatNumber?.trim() || null }
+                : {}),
               invoiceDate,
               ...(dto.poNumber !== undefined
                 ? { poNumber: dto.poNumber?.trim() || null }
@@ -410,6 +418,86 @@ export class InvoicesService {
     return this.syncStatus(id, scope);
   }
 
+  private async resolveBillTo(
+    row: Awaited<ReturnType<InvoicesService['get']>>,
+  ) {
+    let uni = row.university;
+    if (!uni) {
+      const firstStudentId = row.lines[0]?.studentId;
+      if (firstStudentId) {
+        const stu = await this.prisma.student.findFirst({
+          where: { id: firstStudentId, deletedAt: null },
+          select: {
+            university: {
+              select: {
+                id: true,
+                name: true,
+                countryName: true,
+                address: true,
+                vatNumber: true,
+              },
+            },
+          },
+        });
+        uni = stu?.university ?? null;
+      }
+    }
+    const address = row.billToAddress ?? uni?.address ?? null;
+    const vatNumber = row.billToVatNumber ?? uni?.vatNumber ?? null;
+    const name = uni?.name;
+    if (!name && !address && !vatNumber) return null;
+    return {
+      name: name || 'Bill To',
+      lines: [
+        ...(address
+          ? address
+              .replace(/\r\n/g, '\n')
+              .split('\n')
+              .map((l) => l.trim())
+              .filter(Boolean)
+          : []),
+        uni?.countryName ?? '',
+        vatNumber ? `VAT number: ${vatNumber}` : '',
+      ].filter(Boolean),
+    };
+  }
+
+  /** Same PDF that is attached to invoice emails. */
+  async buildPdfBuffer(id: string, scope: RequestBranchScope) {
+    const row = await this.get(id, scope);
+    const allSettings = await this.settings.getAll();
+    const branding = allSettings.invoiceBranding;
+    const orgName = allSettings.orgName || "D' Educationist";
+    const logo = await this.settings.readLogoBuffer();
+    const total = this.invoiceTotal(row.lines);
+    const paid = row.receivables.reduce(
+      (s, r) => s + Number(r.amountReceived),
+      0,
+    );
+    const buffer = await buildInvoicePdf({
+      branding,
+      orgName,
+      invoiceNo: row.invoiceNo,
+      invoiceDate: row.invoiceDate.toISOString().slice(0, 10),
+      currency: row.currencyCode,
+      status: row.status,
+      lines: row.lines.map((l) => ({
+        studentName: l.student?.fullName || l.studentId,
+        studentCode: l.student?.studentCode,
+        course: l.student?.course?.name ?? null,
+        tuitionFee: Number(l.tuitionFee),
+        detail: undefined,
+        amount: Number(l.commissionAmount),
+      })),
+      total,
+      paid,
+      logoBuffer: logo?.buffer ?? null,
+      billTo: await this.resolveBillTo(row),
+    });
+    const safeNo = row.invoiceNo.replace(/[^\w.-]+/g, '_');
+    return { buffer, filename: `invoice-${safeNo}.pdf`, invoiceNo: row.invoiceNo };
+  }
+
   /** Send = Draft → Sent (+ GL). Optionally emails via tenant SMTP. Resend emails again. */
   async send(
     id: string,
@@ -436,16 +524,11 @@ export class InvoicesService {
         const allSettings = await this.settings.getAll();
         const branding = allSettings.invoiceBranding;
         const orgName = allSettings.orgName || "D' Educationist";
-        const logo = await this.settings.readLogoBuffer();
         const studentsLabel = row.lines
           .map((l) => l.student?.fullName || l.studentId)
           .join(', ');
         const uni = row.university?.name || '—';
         const total = this.invoiceTotal(row.lines);
-        const paid = row.receivables.reduce(
-          (s, r) => s + Number(r.amountReceived),
-          0,
-        );
         const invoiceDate = row.invoiceDate.toISOString().slice(0, 10);
         const amountLabel = `${row.currencyCode} ${total.toLocaleString('en-PK', {
           minimumFractionDigits: 2,
@@ -468,66 +551,7 @@ export class InvoicesService {
           applyInvoiceTemplate(branding.emailBody, tplVars);
         // Email body = cover letter (form/template). Invoice goes as PDF attach.
         const html = buildInvoiceEmailHtml(text);
-        let uniForBillTo = row.university;
-        if (!uniForBillTo) {
-          // Legacy invoices without universityId — resolve from first student.
-          const firstStudentId = row.lines[0]?.studentId;
-          if (firstStudentId) {
-            const stu = await this.prisma.student.findFirst({
-              where: { id: firstStudentId, deletedAt: null },
-              select: {
-                university: {
-                  select: {
-                    id: true,
-                    name: true,
-                    countryName: true,
-                    address: true,
-                    vatNumber: true,
-                  },
-                },
-              },
-            });
-            uniForBillTo = stu?.university ?? null;
-          }
-        }
-        const billTo = uniForBillTo
-          ? {
-              name: uniForBillTo.name,
-              lines: [
-                ...(uniForBillTo.address
-                  ? uniForBillTo.address
-                      .replace(/\r\n/g, '\n')
-                      .split('\n')
-                      .map((l) => l.trim())
-                      .filter(Boolean)
-                  : []),
-                uniForBillTo.countryName,
-                uniForBillTo.vatNumber
-                  ? `VAT number: ${uniForBillTo.vatNumber}`
-                  : '',
-              ].filter(Boolean),
-            }
-          : null;
-        const pdf = await buildInvoicePdf({
-          branding,
-          orgName,
-          invoiceNo: row.invoiceNo,
-          invoiceDate,
-          currency: row.currencyCode,
-          status: row.status,
-          lines: row.lines.map((l) => ({
-            studentName: l.student?.fullName || l.studentId,
-            studentCode: l.student?.studentCode,
-            course: l.student?.course?.name ?? null,
-            tuitionFee: Number(l.tuitionFee),
-            detail: undefined,
-            amount: Number(l.commissionAmount),
-          })),
-          total,
-          paid,
-          logoBuffer: logo?.buffer ?? null,
-          billTo,
-        });
+        const { buffer: pdf, filename } = await this.buildPdfBuffer(id, scope);
         await this.mail.sendMail({
           to,
           cc: email?.cc,
@@ -536,7 +560,7 @@ export class InvoicesService {
           html,
           attachments: [
             {
-              filename: `invoice-${row.invoiceNo}.pdf`,
+              filename,
               content: pdf,
               contentType: 'application/pdf',
             },

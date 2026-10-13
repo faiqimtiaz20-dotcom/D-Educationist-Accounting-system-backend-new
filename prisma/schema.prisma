@@ -820,6 +820,10 @@ model Invoice {
   invoiceNo    String        @map("invoice_no") @db.VarChar(40)
   branchId     String        @map("branch_id") @db.Uuid
   universityId String?       @map("university_id") @db.Uuid
+  /// Bill To address snapshot (editable on the invoice; falls back to university).
+  billToAddress   String? @map("bill_to_address") @db.VarChar(1000)
+  /// Bill To VAT number snapshot (editable on the invoice).
+  billToVatNumber String? @map("bill_to_vat_number") @db.VarChar(80)
   invoiceDate  DateTime      @map("invoice_date") @db.Date
   poNumber     String?       @map("po_number") @db.VarChar(60)
   currencyCode String        @map("currency_code") @db.Char(3)
