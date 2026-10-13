@@ -1489,6 +1489,8 @@ model Document {
   storageKey   String       @map("storage_key")
   mimeType     String?      @map("mime_type") @db.VarChar(100)
   sizeBytes    BigInt?      @map("size_bytes")
+  /** File bytes. Kept in Postgres so uploads survive an ephemeral app disk. */
+  content      Bytes?       @db.ByteA
   uploadedById String?      @map("uploaded_by") @db.Uuid
   uploadDate   DateTime     @default(now()) @map("upload_date")
 

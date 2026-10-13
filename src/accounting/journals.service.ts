@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FiscalLockService } from './fiscal-lock.service';
 import { GlPostingService, round2 } from './gl-posting.service';
+import { runGlTransaction } from '../common/gl-transaction';
 import { ApprovalsSyncService } from '../operations/approvals-sync.service';
 import type { AuthUserPayload } from '../common/decorators';
 import type { RequestBranchScope } from '../common/branch-scope.interceptor';
@@ -90,14 +91,14 @@ export class JournalsService {
       const l = lines[i];
       const acc = await this.prisma.glAccount.findFirst({
         where: {
-          code: l.accountCode,
+          ...(l.glAccountId ? { id: l.glAccountId } : { code: l.accountCode }),
           isActive: true,
           isPostable: true,
         },
       });
       if (!acc) {
         throw new BadRequestException(
-          `Invalid or non-postable account ${l.accountCode}`,
+          `Invalid or non-postable account ${l.accountCode || l.glAccountId}`,
         );
       }
       resolved.push({
@@ -105,7 +106,7 @@ export class JournalsService {
         glAccountId: acc.id,
         debit: round2(l.debit),
         credit: round2(l.credit),
-        memo: l.memo?.trim() || null,
+        memo: l.memo?.trim() || l.description?.trim() || null,
       });
     }
     return resolved;
@@ -186,17 +187,21 @@ export class JournalsService {
     this.assertBranch(scope, branchId);
     const entryDate = this.parseDate(dto.entryDate);
     await this.fiscal.assertNotLocked(entryDate);
+    const description = (dto.description ?? dto.narration ?? '').trim();
+    if (!description) {
+      throw new BadRequestException('description is required');
+    }
     const lines = await this.resolveLines(dto.lines);
     const approveNow = Boolean(dto.approveNow);
 
-    const row = await this.prisma.$transaction(async (tx) => {
+    const row = await runGlTransaction(this.prisma, async (tx) => {
       const entryNo = await this.gl.allocateEntryNo(tx);
       const entry = await tx.journalEntry.create({
         data: {
           entryNo,
           entryDate,
           branchId,
-          description: dto.description.trim(),
+          description,
           approvalStatus: approveNow
             ? ApprovalStatus.Approved
             : ApprovalStatus.Pending,
@@ -272,7 +277,7 @@ export class JournalsService {
       ? await this.resolveLines(dto.lines)
       : undefined;
 
-    const row = await this.prisma.$transaction(async (tx) => {
+    const row = await runGlTransaction(this.prisma, async (tx) => {
       if (lines) {
         await tx.journalLine.deleteMany({ where: { journalEntryId: id } });
         await tx.journalLine.createMany({
@@ -283,8 +288,10 @@ export class JournalsService {
         where: { id },
         data: {
           entryDate,
-          ...(dto.description !== undefined
-            ? { description: dto.description.trim() }
+          ...(dto.description !== undefined || dto.narration !== undefined
+            ? {
+                description: (dto.description ?? dto.narration ?? '').trim(),
+              }
             : {}),
         },
         include,
@@ -401,14 +408,17 @@ export class JournalsService {
       throw new ConflictException('Journal already reversed');
     }
 
-    const reverseDate = dto.reverseDate
-      ? this.parseDate(dto.reverseDate)
+    const reverseDate = dto.reverseDate || dto.entryDate
+      ? this.parseDate(dto.reverseDate || dto.entryDate!)
       : new Date();
     await this.fiscal.assertNotLocked(reverseDate);
 
-    const reason = dto.reason?.trim() || `Reversal of ${original.entryNo}`;
+    const reason =
+      dto.reason?.trim() ||
+      dto.description?.trim() ||
+      `Reversal of ${original.entryNo}`;
 
-    const row = await this.prisma.$transaction(async (tx) => {
+    const row = await runGlTransaction(this.prisma, async (tx) => {
       const entryNo = await this.gl.allocateEntryNo(tx);
       return tx.journalEntry.create({
         data: {

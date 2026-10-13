@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FiscalLockService } from '../accounting/fiscal-lock.service';
 import { GlPostingService, round2 } from '../accounting/gl-posting.service';
+import { runGlTransaction } from '../common/gl-transaction';
 import type { AuthUserPayload } from '../common/decorators';
 import type { RequestBranchScope } from '../common/branch-scope.interceptor';
 import { resolveWritableBranchId } from '../common/branch-scope';
@@ -131,7 +132,7 @@ export class PettyCashService {
       }
     }
 
-    const row = await this.prisma.$transaction(async (tx) => {
+    const row = await runGlTransaction(this.prisma, async (tx) => {
       const pettyCashNo = await nextBranchYearNo(tx, branchId, {
         model: 'pettyCashEntry',
         field: 'pettyCashNo',

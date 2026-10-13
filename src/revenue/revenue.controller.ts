@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -109,6 +111,7 @@ export class RevenueController {
   }
 
   @Post('invoices/:id/send')
+  @HttpCode(HttpStatus.OK)
   @RequirePermission(MODULE_CODES.INVOICES_RECEIVABLES, 'full')
   sendInvoice(
     @Param('id') id: string,

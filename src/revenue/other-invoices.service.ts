@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FiscalLockService } from '../accounting/fiscal-lock.service';
 import { GlPostingService, round2 } from '../accounting/gl-posting.service';
+import { runGlTransaction } from '../common/gl-transaction';
 import type { AuthUserPayload } from '../common/decorators';
 import type { RequestBranchScope } from '../common/branch-scope.interceptor';
 import { resolveWritableBranchId } from '../common/branch-scope';
@@ -97,7 +98,7 @@ export class OtherInvoicesService {
     const status = dto.status ?? OtherInvoiceStatus.Draft;
     const fx = await this.gl.getFxRateToPkr(dto.currencyCode, invoiceDate);
 
-    const row = await this.prisma.$transaction(async (tx) => {
+    const row = await runGlTransaction(this.prisma, async (tx) => {
       const invoiceNo = await this.nextNo(branchId, tx);
       const invoice = await tx.otherInvoice.create({
         data: {
@@ -188,7 +189,7 @@ export class OtherInvoicesService {
       throw new BadRequestException('Cannot revert a posted invoice to Draft');
     }
 
-    const row = await this.prisma.$transaction(async (tx) => {
+    const row = await runGlTransaction(this.prisma, async (tx) => {
       if (dto.lines) {
         await tx.otherInvoiceLine.deleteMany({ where: { otherInvoiceId: id } });
       }
@@ -255,7 +256,7 @@ export class OtherInvoicesService {
     const before = await this.get(id, scope);
     await this.fiscal.assertNotLocked(before.invoiceDate);
 
-    await this.prisma.$transaction(async (tx) => {
+    await runGlTransaction(this.prisma, async (tx) => {
       await this.gl.reverseSourceJournal(tx, {
         sourceType: JournalSourceType.OtherInvoice,
         sourceId: id,

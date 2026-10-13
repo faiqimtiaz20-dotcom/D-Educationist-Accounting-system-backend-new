@@ -143,6 +143,7 @@ export class AuthService {
     const fail = async (reason: string) => {
       await this.audit.log({
         userId: user?.id,
+        tenantId: user?.tenantId,
         action: 'LOGIN_FAILED',
         module: 'Auth',
         entityType: 'User',
@@ -184,6 +185,7 @@ export class AuthService {
 
     await this.audit.log({
       userId: user!.id,
+      tenantId: user!.tenantId,
       action: 'LOGIN',
       module: 'Auth',
       entityType: 'User',

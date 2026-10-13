@@ -2,19 +2,26 @@ import {
   BadRequestException,
   ConflictException,
   HttpException,
+  Logger,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
-/** Map common Prisma errors to HTTP exceptions so clients don't see opaque 500s. */
+const log = new Logger('PrismaHttp');
+
+/** Map common Prisma errors to HTTP exceptions. Never return query text or file paths. */
 export function rethrowPrismaAsHttp(err: unknown): never {
   if (err instanceof HttpException) throw err;
 
+  if (
+    err instanceof Prisma.PrismaClientValidationError ||
+    err instanceof Prisma.PrismaClientKnownRequestError ||
+    err instanceof Prisma.PrismaClientUnknownRequestError
+  ) {
+    log.error(err.message);
+  }
+
   if (err instanceof Prisma.PrismaClientValidationError) {
-    const msg = err.message.split('\n').filter(Boolean).pop() ?? err.message;
-    throw new BadRequestException(
-      msg.replace(/^Invalid `.*?` invocation:\s*/i, '').slice(0, 400) ||
-        'Invalid database request',
-    );
+    throw new BadRequestException('Invalid database request');
   }
 
   if (err instanceof Prisma.PrismaClientKnownRequestError) {
@@ -31,14 +38,11 @@ export function rethrowPrismaAsHttp(err: unknown): never {
       throw new BadRequestException('Invalid identifier format');
     }
     if (err.code === 'P2028') {
-      const detail = err.message.replace(/\s+/g, ' ').slice(0, 280);
       throw new BadRequestException(
-        `Database transaction failed (P2028). Often a timeout while posting GL — retry once. ${detail}`,
+        'The save took too long and was not recorded. Please try again.',
       );
     }
-    throw new BadRequestException(
-      `Database error ${err.code}: ${err.message.slice(0, 200)}`,
-    );
+    throw new BadRequestException('Database request failed. Please try again.');
   }
 
   throw err;

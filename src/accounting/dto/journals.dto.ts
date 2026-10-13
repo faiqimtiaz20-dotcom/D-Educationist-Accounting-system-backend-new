@@ -11,14 +11,21 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 
 export class JournalLineDto {
+  /** Either accountCode or glAccountId is required. GET returns glAccountId. */
+  @ValidateIf((o: JournalLineDto) => !o.glAccountId)
   @IsString()
   @MinLength(1)
   @MaxLength(20)
-  accountCode!: string;
+  accountCode?: string;
+
+  @ValidateIf((o: JournalLineDto) => !o.accountCode)
+  @IsUUID()
+  glAccountId?: string;
 
   @Type(() => Number)
   @IsNumber()
@@ -34,6 +41,12 @@ export class JournalLineDto {
   @IsString()
   @MaxLength(200)
   memo?: string;
+
+  /** Alias of memo. Clients that round-trip a fetched line send description. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  description?: string;
 }
 
 export class CreateJournalDto {
@@ -43,10 +56,18 @@ export class CreateJournalDto {
   @IsString()
   entryDate!: string;
 
+  @ValidateIf((o: CreateJournalDto) => !o.narration)
   @IsString()
   @MinLength(1)
   @MaxLength(500)
-  description!: string;
+  description?: string;
+
+  /** Alias of description. */
+  @ValidateIf((o: CreateJournalDto) => !o.description)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  narration?: string;
 
   @IsArray()
   @ArrayMinSize(2)
@@ -71,6 +92,12 @@ export class UpdateJournalDto {
   description?: string;
 
   @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  narration?: string;
+
+  @IsOptional()
   @IsArray()
   @ArrayMinSize(2)
   @ValidateNested({ each: true })
@@ -83,10 +110,21 @@ export class ReverseJournalDto {
   @IsString()
   reverseDate?: string;
 
+  /** Alias of reverseDate. */
+  @IsOptional()
+  @IsString()
+  entryDate?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(500)
   reason?: string;
+
+  /** Alias of reason. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
 }
 
 export { ApprovalStatus, JournalSourceType };

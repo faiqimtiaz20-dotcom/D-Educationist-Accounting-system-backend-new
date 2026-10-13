@@ -5,14 +5,14 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentType, Prisma } from '@prisma/client';
+import { Readable } from 'stream';
 import {
   createReadStream,
   existsSync,
   mkdirSync,
   unlinkSync,
-  writeFileSync,
 } from 'fs';
-import { dirname, join, normalize, sep } from 'path';
+import { join, normalize, sep } from 'path';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -24,6 +24,23 @@ function formatSize(bytes: number | bigint | null | undefined): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+const documentPublic = {
+  id: true,
+  tenantId: true,
+  name: true,
+  docType: true,
+  linkedType: true,
+  linkedId: true,
+  storageKey: true,
+  mimeType: true,
+  sizeBytes: true,
+  uploadedById: true,
+  uploadDate: true,
+  uploadedBy: { select: { id: true, fullName: true } },
+} satisfies Prisma.DocumentSelect;
+
+type DocumentRow = Prisma.DocumentGetPayload<{ select: typeof documentPublic }>;
 
 @Injectable()
 export class DocumentsService {
@@ -37,8 +54,12 @@ export class DocumentsService {
     this.uploadRoot =
       this.config.get<string>('UPLOAD_DIR') ||
       join(process.cwd(), 'uploads');
-    if (!existsSync(this.uploadRoot)) {
-      mkdirSync(this.uploadRoot, { recursive: true });
+    try {
+      if (!existsSync(this.uploadRoot)) {
+        mkdirSync(this.uploadRoot, { recursive: true });
+      }
+    } catch {
+      // Ephemeral or read-only disks still serve new uploads from Postgres.
     }
   }
 
@@ -56,9 +77,7 @@ export class DocumentsService {
     return abs;
   }
 
-  private map(row: Prisma.DocumentGetPayload<{
-    include: { uploadedBy: { select: { id: true; fullName: true } } };
-  }>) {
+  private map(row: DocumentRow) {
     return {
       id: row.id,
       name: row.name,
@@ -84,9 +103,7 @@ export class DocumentsService {
           ...(opts.linkedId ? { linkedId: opts.linkedId } : {}),
           ...(opts.docType ? { docType: opts.docType } : {}),
         },
-        include: {
-          uploadedBy: { select: { id: true, fullName: true } },
-        },
+        select: documentPublic,
         orderBy: { uploadDate: 'desc' },
       })
       .then((rows) => rows.map((r) => this.map(r)));
@@ -95,7 +112,7 @@ export class DocumentsService {
   async get(id: string) {
     const row = await this.prisma.document.findUnique({
       where: { id },
-      include: { uploadedBy: { select: { id: true, fullName: true } } },
+      select: documentPublic,
     });
     if (!row) throw new NotFoundException('Document not found');
     return this.map(row);
@@ -111,7 +128,7 @@ export class DocumentsService {
     },
     user: AuthUserPayload,
   ) {
-    if (!file?.buffer && !file?.path) {
+    if (!file?.buffer?.length) {
       throw new BadRequestException('File is required');
     }
     if (!meta.linkedType?.trim() || !meta.linkedId) {
@@ -131,25 +148,7 @@ export class DocumentsService {
       ? file.originalname.slice(file.originalname.lastIndexOf('.'))
       : ''
     ).slice(0, 20);
-    // MT8: uploads/{tenantId}/{uuid}{ext}
     const storageKey = `${user.tenantId}/${id}${ext || ''}`;
-    const absPath = this.resolveStoragePath(storageKey);
-    const dir = dirname(absPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-
-    if (file.buffer) {
-      writeFileSync(absPath, file.buffer);
-    } else if (file.path) {
-      const { copyFileSync } = await import('fs');
-      copyFileSync(file.path, absPath);
-      try {
-        unlinkSync(file.path);
-      } catch {
-        /* ignore */
-      }
-    }
 
     const row = await this.prisma.document.create({
       data: {
@@ -161,10 +160,11 @@ export class DocumentsService {
         linkedId: meta.linkedId,
         storageKey,
         mimeType: file.mimetype || null,
-        sizeBytes: BigInt(file.size ?? 0),
+        sizeBytes: BigInt(file.size ?? file.buffer.length),
+        content: new Uint8Array(file.buffer),
         uploadedById: user.id,
       },
-      include: { uploadedBy: { select: { id: true, fullName: true } } },
+      select: documentPublic,
     });
 
     await this.audit.log({
@@ -188,9 +188,19 @@ export class DocumentsService {
   async downloadStream(id: string) {
     const row = await this.prisma.document.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Document not found');
+
+    if (row.content && row.content.length > 0) {
+      return {
+        stream: Readable.from(Buffer.from(row.content)),
+        mimeType: row.mimeType || 'application/octet-stream',
+        name: row.name,
+        sizeBytes: row.sizeBytes != null ? Number(row.sizeBytes) : row.content.length,
+      };
+    }
+
     const absPath = this.resolveStoragePath(row.storageKey);
     if (!existsSync(absPath)) {
-      throw new NotFoundException('File missing on disk');
+      throw new NotFoundException('File missing');
     }
     return {
       stream: createReadStream(absPath),
@@ -201,16 +211,17 @@ export class DocumentsService {
   }
 
   async remove(id: string, user: AuthUserPayload) {
-    const row = await this.prisma.document.findUnique({ where: { id } });
+    const row = await this.prisma.document.findUnique({
+      where: { id },
+      select: { id: true, name: true, storageKey: true },
+    });
     if (!row) throw new NotFoundException('Document not found');
-    const absPath = this.resolveStoragePath(row.storageKey);
     await this.prisma.document.delete({ where: { id } });
-    if (existsSync(absPath)) {
-      try {
-        unlinkSync(absPath);
-      } catch {
-        /* ignore disk errors after DB delete */
-      }
+    try {
+      const absPath = this.resolveStoragePath(row.storageKey);
+      if (existsSync(absPath)) unlinkSync(absPath);
+    } catch {
+      /* legacy disk copy is optional */
     }
     await this.audit.log({
       userId: user.id,

@@ -25,6 +25,7 @@ import {
   buildInvoiceEmailHtml,
 } from '../settings/invoice-branding';
 import { buildInvoicePdf } from '../settings/invoice-pdf';
+import { runGlTransaction } from '../common/gl-transaction';
 import { rethrowPrismaAsHttp } from '../common/prisma-http';
 
 const invoiceInclude = {
@@ -180,7 +181,7 @@ export class InvoicesService {
       dto.exchangeRate ??
       (await this.gl.getFxRateToPkr(dto.currencyCode, invoiceDate));
 
-    const row = await this.prisma.$transaction(async (tx) => {
+    const row = await runGlTransaction(this.prisma, async (tx) => {
       const invoiceNo = await this.nextInvoiceNo(branchId, tx);
       const invoice = await tx.invoice.create({
         data: {
@@ -327,8 +328,7 @@ export class InvoicesService {
 
     let row;
     try {
-      row = await this.prisma.$transaction(
-        async (tx) => {
+      row = await runGlTransaction(this.prisma, async (tx) => {
           if (dto.lines) {
             await tx.invoiceLine.deleteMany({ where: { invoiceId: id } });
           }
@@ -398,9 +398,7 @@ export class InvoicesService {
           }
 
           return invoice;
-        },
-        { maxWait: 15_000, timeout: 30_000 },
-      );
+      });
     } catch (e) {
       rethrowPrismaAsHttp(e);
     }
@@ -506,6 +504,9 @@ export class InvoicesService {
     email?: { to?: string; cc?: string; subject?: string; body?: string },
   ) {
     const before = await this.get(id, scope);
+    if (before.status !== InvoiceStatus.Draft && !email?.to?.trim()) {
+      throw new ConflictException('Invoice already sent');
+    }
     let row = before;
 
     if (before.status === InvoiceStatus.Draft) {
@@ -607,7 +608,7 @@ export class InvoicesService {
       throw new ConflictException('Cannot delete invoice with remittances');
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    await runGlTransaction(this.prisma, async (tx) => {
       await this.gl.reverseSourceJournal(tx, {
         sourceType: JournalSourceType.Invoice,
         sourceId: id,

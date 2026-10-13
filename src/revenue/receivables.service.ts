@@ -16,6 +16,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FiscalLockService } from '../accounting/fiscal-lock.service';
 import { GlPostingService, round2 } from '../accounting/gl-posting.service';
+import { runGlTransaction } from '../common/gl-transaction';
 import type { AuthUserPayload } from '../common/decorators';
 import type { RequestBranchScope } from '../common/branch-scope.interceptor';
 import { resolveWritableBranchId } from '../common/branch-scope';
@@ -172,7 +173,7 @@ export class ReceivablesService {
 
     let row;
     try {
-      row = await this.prisma.$transaction(async (tx) => {
+      row = await runGlTransaction(this.prisma, async (tx) => {
         const receiptNo = await this.nextReceiptNo(tx);
         const receivable = await tx.receivable.create({
           data: {
@@ -322,7 +323,7 @@ export class ReceivablesService {
     await this.fiscal.assertNotLocked(bulk.receiptDate);
     const whtRate = await this.gl.getWhtRateFraction();
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await runGlTransaction(this.prisma, async (tx) => {
       const childIds: string[] = [];
 
       for (const alloc of dto.allocations) {
@@ -420,7 +421,7 @@ export class ReceivablesService {
     if (before.isBulkRemittance && before.allocationStatus === AllocationStatus.allocated) {
       throw new ConflictException('Cannot delete allocated bulk remittance');
     }
-    await this.prisma.$transaction(async (tx) => {
+    await runGlTransaction(this.prisma, async (tx) => {
       await this.gl.reverseSourceJournal(tx, {
         sourceType: before.isBulkRemittance
           ? JournalSourceType.BulkReceivable

@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -103,6 +105,7 @@ export class AccountingController {
   }
 
   @Post('journal-entries/:id/approve')
+  @HttpCode(HttpStatus.OK)
   @RequirePermission(MODULE_CODES.JOURNAL_ENTRIES, 'full')
   approveJournal(
     @Param('id') id: string,

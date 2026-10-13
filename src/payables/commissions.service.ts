@@ -9,6 +9,7 @@ import { JournalSourceType, Prisma, SubAgentCommissionStatus } from '@prisma/cli
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { GlPostingService, round2 } from '../accounting/gl-posting.service';
+import { runGlTransaction } from '../common/gl-transaction';
 import type { AuthUserPayload } from '../common/decorators';
 import type { RequestBranchScope } from '../common/branch-scope.interceptor';
 import { resolveWritableBranchId } from '../common/branch-scope';
@@ -120,7 +121,7 @@ export class CommissionsService {
     }
 
     try {
-      const row = await this.prisma.$transaction(async (tx) => {
+      const row = await runGlTransaction(this.prisma, async (tx) => {
         const commissionNo = await nextBranchYearNo(tx, branchId, {
           model: 'subAgentCommission',
           field: 'commissionNo',
@@ -213,7 +214,7 @@ export class CommissionsService {
       Math.abs(amounts.whtPkr - Number(before.whtPkr)) > 0.001 ||
       Math.abs(amounts.payablePkrNet - Number(before.payablePkrNet)) > 0.001;
 
-    const row = await this.prisma.$transaction(async (tx) => {
+    const row = await runGlTransaction(this.prisma, async (tx) => {
       if (amountsChanged) {
         await this.gl.reverseSourceJournal(tx, {
           sourceType: JournalSourceType.SubAgentCommission,
@@ -276,7 +277,7 @@ export class CommissionsService {
     if (before.payments.length > 0) {
       throw new ConflictException('Cannot delete commission with payments');
     }
-    await this.prisma.$transaction(async (tx) => {
+    await runGlTransaction(this.prisma, async (tx) => {
       await this.gl.reverseSourceJournal(tx, {
         sourceType: JournalSourceType.SubAgentCommission,
         sourceId: id,

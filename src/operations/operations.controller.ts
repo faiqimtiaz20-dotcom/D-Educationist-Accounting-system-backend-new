@@ -103,7 +103,7 @@ export class OperationsController {
     );
   }
 
-  // ── Documents (local disk under UPLOAD_DIR / ./uploads) ────────────────────
+  // ── Documents (bytes stored on the document row) ───────────────────────────
 
   @Get('documents')
   @RequirePermission(MODULE_CODES.OPERATIONS, 'read')

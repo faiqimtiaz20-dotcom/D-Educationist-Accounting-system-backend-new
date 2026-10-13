@@ -129,6 +129,20 @@ export class PayrollController {
     return this.payroll.get(id, this.scope(user, req));
   }
 
+  @Post('payroll-runs')
+  @RequirePermission(MODULE_CODES.OPERATIONS, 'full')
+  createRun(
+    @Body() dto: ProcessPayrollDto,
+    @CurrentUser() user: AuthUserPayload,
+    @Req() req: Request,
+  ) {
+    return this.payroll.process(
+      dto,
+      user,
+      this.scope(user, req, dto.branchId),
+    );
+  }
+
   @Post('payroll-runs/process')
   @RequirePermission(MODULE_CODES.OPERATIONS, 'full')
   process(

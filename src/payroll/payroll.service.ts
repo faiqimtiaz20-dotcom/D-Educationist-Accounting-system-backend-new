@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FiscalLockService } from '../accounting/fiscal-lock.service';
 import { GlPostingService, round2 } from '../accounting/gl-posting.service';
+import { runGlTransaction } from '../common/gl-transaction';
 import { computeSalary } from './salary-tax';
 import type { AuthUserPayload } from '../common/decorators';
 import type { RequestBranchScope } from '../common/branch-scope.interceptor';
@@ -205,7 +206,7 @@ export class PayrollService {
       lineData.reduce((s, l) => s + l.reimbursements, 0),
     );
 
-    const run = await this.prisma.$transaction(async (tx) => {
+    const run = await runGlTransaction(this.prisma, async (tx) => {
       if (existing?.status === PayrollRunStatus.Draft) {
         await tx.payrollLine.deleteMany({ where: { payrollRunId: existing.id } });
         await tx.payrollRun.delete({ where: { id: existing.id } });
@@ -370,7 +371,7 @@ export class PayrollService {
         lineCreates.reduce((s, l) => s + l.reimbursements, 0),
       );
 
-      const run = await this.prisma.$transaction(async (tx) => {
+      const run = await runGlTransaction(this.prisma, async (tx) => {
         if (existing) {
           await tx.payrollLine.deleteMany({
             where: { payrollRunId: existing.id },
@@ -481,7 +482,7 @@ export class PayrollService {
     const paidDate = new Date();
     await this.fiscal.assertNotLocked(paidDate);
 
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const updated = await runGlTransaction(this.prisma, async (tx) => {
       const je = await this.gl.postPayrollPayment(tx, {
         payrollRunId: run.id,
         branchId: run.branchId,
