@@ -22,6 +22,8 @@ export const GL_CODES = {
   AP: '2100',
   TAX_PAYABLE: '2200',
   SALARY_PAYABLE: '2300',
+  /** Credit side for bank opening balance (imprest / brought-forward funds). */
+  EQUITY: '3000',
   COMMISSION_INCOME: '4100',
   OTHER_INCOME: '4200',
   FX_GAIN: '4300',
@@ -49,6 +51,7 @@ const RUNTIME_COA_FALLBACK: Record<
     accountType: 'liability',
     sortOrder: 14,
   },
+  '3000': { name: 'Equity', accountType: 'equity', sortOrder: 20 },
   '4100': { name: 'Commission Income', accountType: 'income', sortOrder: 31 },
   '4200': { name: 'Other Income', accountType: 'income', sortOrder: 32 },
   '4300': { name: 'FX Gain', accountType: 'income', sortOrder: 33 },
@@ -1235,6 +1238,130 @@ export class GlPostingService {
         createdById: input.actorId,
         approvedById: input.actorId,
         lines: { create: lines },
+      },
+      include: { lines: true },
+    });
+  }
+
+  /**
+   * Sync bank account opening balance into GL (Dr 1120 / Cr 3000 Equity).
+   * Updates in place on change; removes the journal when opening is zero.
+   * Amount is posted in PKR (FX applied when currency is not PKR).
+   */
+  async syncBankOpening(
+    tx: Tx,
+    input: {
+      bankAccountId: string;
+      branchId: string;
+      openingBalance: number;
+      currencyCode: string;
+      bankLabel: string;
+      actorId?: string;
+      entryDate?: Date;
+    },
+  ) {
+    const opening = round2(input.openingBalance);
+    const entryDate = input.entryDate ?? new Date();
+    let amountPkr = opening;
+    if (Math.abs(opening) > 1e-9 && input.currencyCode.toUpperCase() !== 'PKR') {
+      const fx = await this.getFxRateToPkr(
+        input.currencyCode.toUpperCase(),
+        entryDate,
+      );
+      amountPkr = round2(opening * fx);
+    }
+    amountPkr = round2(amountPkr);
+
+    const existing = await tx.journalEntry.findFirst({
+      where: {
+        sourceType: JournalSourceType.BankOpening,
+        sourceId: input.bankAccountId,
+        tenantId: currentTenantId(),
+      },
+      include: { lines: { orderBy: { lineNo: 'asc' } } },
+    });
+
+    if (Math.abs(amountPkr) < 1e-9) {
+      if (!existing) return null;
+      // Drop any reversal of this opening, then delete the opening JE.
+      await tx.journalEntry.deleteMany({
+        where: {
+          sourceType: JournalSourceType.Reversal,
+          sourceId: existing.id,
+        },
+      });
+      await tx.journalLine.deleteMany({ where: { journalEntryId: existing.id } });
+      await tx.journalEntry.delete({ where: { id: existing.id } });
+      return null;
+    }
+
+    const bankId = await this.resolveAccountId(GL_CODES.BANK, tx);
+    const equityId = await this.resolveAccountId(GL_CODES.EQUITY, tx);
+    const bankDr = amountPkr > 0 ? amountPkr : 0;
+    const bankCr = amountPkr < 0 ? Math.abs(amountPkr) : 0;
+    const equityDr = amountPkr < 0 ? Math.abs(amountPkr) : 0;
+    const equityCr = amountPkr > 0 ? amountPkr : 0;
+    const description = `Bank opening — ${input.bankLabel}`;
+
+    if (existing) {
+      await tx.journalLine.deleteMany({ where: { journalEntryId: existing.id } });
+      return tx.journalEntry.update({
+        where: { id: existing.id },
+        data: {
+          entryDate,
+          branchId: input.branchId,
+          description,
+          lines: {
+            create: [
+              {
+                lineNo: 1,
+                glAccountId: bankId,
+                debit: bankDr,
+                credit: bankCr,
+              },
+              {
+                lineNo: 2,
+                glAccountId: equityId,
+                debit: equityDr,
+                credit: equityCr,
+              },
+            ],
+          },
+        },
+        include: { lines: true },
+      });
+    }
+
+    const entryNo = await this.nextEntryNo(tx);
+    return tx.journalEntry.create({
+      data: {
+        entryNo,
+        entryDate,
+        branchId: input.branchId,
+        description,
+        approvalStatus: ApprovalStatus.Approved,
+        sourceType: JournalSourceType.BankOpening,
+        sourceId: input.bankAccountId,
+        isAutoPosted: true,
+        postedAt: new Date(),
+        createdById: input.actorId,
+        approvedById: input.actorId,
+        lines: {
+          create: [
+            {
+              lineNo: 1,
+              glAccountId: bankId,
+              debit: bankDr,
+              credit: bankCr,
+            },
+            {
+              lineNo: 2,
+              glAccountId: equityId,
+              debit: equityDr,
+              credit: equityCr,
+            },
+          ],
+        },
       },
       include: { lines: true },
     });

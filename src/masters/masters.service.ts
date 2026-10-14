@@ -7,6 +7,8 @@ import {
 import { GlAccountType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { GlPostingService } from '../accounting/gl-posting.service';
+import { runGlTransaction } from '../common/gl-transaction';
 import type { AuthUserPayload } from '../common/decorators';
 import type { RequestBranchScope } from '../common/branch-scope.interceptor';
 import { currentTenantId } from '../common/tenant-scope';
@@ -30,6 +32,7 @@ import {
   UpsertFxRateDto,
 } from './dto/masters.dto';
 import { nextMasterNo } from '../common/document-numbers';
+import { rethrowPrismaAsHttp } from '../common/prisma-http';
 
 /** Flattened COA seed matching frontend src/lib/coa.ts */
 export const COA_SEED: Array<{
@@ -71,6 +74,7 @@ export class MastersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly gl: GlPostingService,
   ) {}
 
   // ── Universities ──────────────────────────────────────────────────────────
@@ -891,18 +895,42 @@ export class MastersService {
     });
     if (!branch) throw new BadRequestException('Branch not found');
 
-    const row = await this.prisma.bankAccount.create({
-      data: {
-        branchId: dto.branchId,
-        name: dto.name.trim(),
-        bankName: dto.bankName.trim(),
-        accountNo: dto.accountNo.trim(),
-        currencyCode: dto.currencyCode.toUpperCase(),
-        openingBalance: dto.openingBalance ?? 0,
-        isActive: dto.isActive ?? true,
-      },
-      include: { branch: { select: { id: true, code: true, name: true } } },
-    });
+    const opening = Number(dto.openingBalance ?? 0);
+    if (!Number.isFinite(opening)) {
+      throw new BadRequestException('Invalid opening balance');
+    }
+
+    let row;
+    try {
+      row = await runGlTransaction(this.prisma, async (tx) => {
+        const account = await tx.bankAccount.create({
+          data: {
+            branchId: dto.branchId,
+            name: dto.name.trim(),
+            bankName: dto.bankName.trim(),
+            accountNo: dto.accountNo.trim(),
+            currencyCode: dto.currencyCode.toUpperCase(),
+            openingBalance: opening,
+            isActive: dto.isActive ?? true,
+          },
+          include: {
+            branch: { select: { id: true, code: true, name: true } },
+          },
+        });
+        await this.gl.syncBankOpening(tx, {
+          bankAccountId: account.id,
+          branchId: account.branchId,
+          openingBalance: opening,
+          currencyCode: account.currencyCode,
+          bankLabel: account.name,
+          actorId,
+        });
+        return account;
+      });
+    } catch (e) {
+      rethrowPrismaAsHttp(e);
+    }
+
     await this.audit.log({
       userId: actorId,
       action: 'CREATE',
@@ -928,25 +956,64 @@ export class MastersService {
       });
       if (!branch) throw new BadRequestException('Branch not found');
     }
-    const row = await this.prisma.bankAccount.update({
-      where: { id },
-      data: {
-        ...(dto.branchId !== undefined ? { branchId: dto.branchId } : {}),
-        ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-        ...(dto.bankName !== undefined ? { bankName: dto.bankName.trim() } : {}),
-        ...(dto.accountNo !== undefined
-          ? { accountNo: dto.accountNo.trim() }
-          : {}),
-        ...(dto.currencyCode !== undefined
-          ? { currencyCode: dto.currencyCode.toUpperCase() }
-          : {}),
-        ...(dto.openingBalance !== undefined
-          ? { openingBalance: dto.openingBalance }
-          : {}),
-        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
-      },
-      include: { branch: { select: { id: true, code: true, name: true } } },
-    });
+
+    const nextOpening =
+      dto.openingBalance !== undefined
+        ? Number(dto.openingBalance)
+        : Number(before.openingBalance);
+    if (!Number.isFinite(nextOpening)) {
+      throw new BadRequestException('Invalid opening balance');
+    }
+
+    let row;
+    try {
+      row = await runGlTransaction(this.prisma, async (tx) => {
+        const account = await tx.bankAccount.update({
+          where: { id },
+          data: {
+            ...(dto.branchId !== undefined ? { branchId: dto.branchId } : {}),
+            ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+            ...(dto.bankName !== undefined
+              ? { bankName: dto.bankName.trim() }
+              : {}),
+            ...(dto.accountNo !== undefined
+              ? { accountNo: dto.accountNo.trim() }
+              : {}),
+            ...(dto.currencyCode !== undefined
+              ? { currencyCode: dto.currencyCode.toUpperCase() }
+              : {}),
+            ...(dto.openingBalance !== undefined
+              ? { openingBalance: nextOpening }
+              : {}),
+            ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+          },
+          include: {
+            branch: { select: { id: true, code: true, name: true } },
+          },
+        });
+
+        // Keep GL 1120 in sync whenever opening, currency, branch, or name changes.
+        const openingTouched =
+          dto.openingBalance !== undefined ||
+          dto.currencyCode !== undefined ||
+          dto.branchId !== undefined ||
+          dto.name !== undefined;
+        if (openingTouched) {
+          await this.gl.syncBankOpening(tx, {
+            bankAccountId: account.id,
+            branchId: account.branchId,
+            openingBalance: Number(account.openingBalance),
+            currencyCode: account.currencyCode,
+            bankLabel: account.name,
+            actorId,
+          });
+        }
+        return account;
+      });
+    } catch (e) {
+      rethrowPrismaAsHttp(e);
+    }
+
     await this.audit.log({
       userId: actorId,
       action: 'UPDATE',

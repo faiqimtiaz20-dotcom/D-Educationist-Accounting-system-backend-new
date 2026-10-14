@@ -130,6 +130,8 @@ enum JournalSourceType {
   PayrollPayment
   /// Bank receipt before invoice allocation
   BulkReceivable
+  /// Opening balance on bank account create/update (Dr 1120 / Cr 3000)
+  BankOpening
 }
 
 enum ContraEntryType {
