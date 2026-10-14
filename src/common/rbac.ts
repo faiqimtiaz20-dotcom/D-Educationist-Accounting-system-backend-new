@@ -84,6 +84,18 @@ export function canTopUpPettyCash(
   return canAccessAllTenantBranches(roleCode, branchIsHeadOffice);
 }
 
+/**
+ * Expense self-approve (segregation relaxed): Tenant Admin, Branch Manager,
+ * Accountant. Cashier and other roles still cannot approve their own request.
+ */
+export function canSelfApproveExpense(roleCode: string) {
+  return (
+    isTenantAdminRole(roleCode) ||
+    roleCode === ROLE_CODES.BRANCH_MANAGER ||
+    roleCode === ROLE_CODES.ACCOUNTANT
+  );
+}
+
 /** @deprecated Use isTenantAdminRole — kept for call-site compatibility. */
 export function isSuperAdminRole(roleCode: string) {
   return isTenantAdminRole(roleCode);

@@ -14,6 +14,13 @@ import { runGlTransaction } from '../common/gl-transaction';
 import type { AuthUserPayload } from '../common/decorators';
 import type { RequestBranchScope } from '../common/branch-scope.interceptor';
 import { resolveWritableBranchId } from '../common/branch-scope';
+import { MailService } from '../mail/mail.service';
+import { SettingsService } from '../settings/settings.service';
+import {
+  applyInvoiceTemplate,
+  buildInvoiceEmailHtml,
+} from '../settings/invoice-branding';
+import { buildInvoicePdf } from '../settings/invoice-pdf';
 import {
   CreateOtherInvoiceDto,
   RecordOtherInvoicePaymentDto,
@@ -36,6 +43,8 @@ export class OtherInvoicesService {
     private readonly audit: AuditService,
     private readonly fiscal: FiscalLockService,
     private readonly gl: GlPostingService,
+    private readonly mail: MailService,
+    private readonly settings: SettingsService,
   ) {}
 
   private assertBranch(scope: RequestBranchScope, branchId: string) {
@@ -454,5 +463,158 @@ export class OtherInvoicesService {
     });
 
     return this.get(id, scope);
+  }
+
+  /** PDF for email attach / download — reuses branding layout with service lines. */
+  async buildPdfBuffer(id: string, scope: RequestBranchScope) {
+    const row = await this.get(id, scope);
+    const allSettings = await this.settings.getAll();
+    const branding = {
+      ...allSettings.invoiceBranding,
+      documentTitle:
+        allSettings.invoiceBranding.documentTitle || 'Invoice',
+    };
+    const orgName = allSettings.orgName || "D' Educationist";
+    const logo = await this.settings.readLogoBuffer();
+    const total = this.total(row.lines);
+    const paid = round2(
+      row.receipts.reduce((s, r) => s + Number(r.amountReceived), 0),
+    );
+    const buffer = await buildInvoicePdf({
+      branding,
+      orgName,
+      invoiceNo: row.invoiceNo,
+      invoiceDate: row.invoiceDate.toISOString().slice(0, 10),
+      currency: row.currencyCode,
+      status: row.status,
+      lines: row.lines.map((l) => ({
+        studentName: l.description,
+        studentCode: null,
+        course: null,
+        tuitionFee: undefined,
+        detail: `${Number(l.quantity)} × ${Number(l.unitPrice)}`,
+        amount: Number(l.lineTotal),
+      })),
+      total,
+      paid,
+      logoBuffer: logo?.buffer ?? null,
+      billTo: {
+        name: row.billTo,
+        lines: [row.category].filter(Boolean),
+      },
+    });
+    const safeNo = row.invoiceNo.replace(/[^\w.-]+/g, '_');
+    return {
+      buffer,
+      filename: `other-invoice-${safeNo}.pdf`,
+      invoiceNo: row.invoiceNo,
+    };
+  }
+
+  /**
+   * Send = Draft → Sent (+ GL accrual). Optionally email via tenant SMTP.
+   * Already-Sent invoices can resend when `to` is provided.
+   */
+  async send(
+    id: string,
+    user: AuthUserPayload,
+    scope: RequestBranchScope,
+    email?: { to?: string; cc?: string; subject?: string; body?: string },
+  ) {
+    const before = await this.get(id, scope);
+    if (before.status !== OtherInvoiceStatus.Draft && !email?.to?.trim()) {
+      throw new ConflictException('Other invoice already sent');
+    }
+    let row = before;
+
+    if (before.status === OtherInvoiceStatus.Draft) {
+      row = await this.update(
+        id,
+        { status: OtherInvoiceStatus.Sent },
+        user,
+        scope,
+      );
+    }
+
+    let emailSent = false;
+    let emailError: string | null = null;
+    const to = email?.to?.trim();
+    if (to) {
+      try {
+        const allSettings = await this.settings.getAll();
+        const branding = allSettings.invoiceBranding;
+        const orgName = allSettings.orgName || "D' Educationist";
+        const total = this.total(row.lines);
+        const invoiceDate = row.invoiceDate.toISOString().slice(0, 10);
+        const amountLabel = `${row.currencyCode} ${total.toLocaleString('en-PK', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`;
+        const tplVars = {
+          invoiceNo: row.invoiceNo,
+          invoiceDate,
+          amount: amountLabel,
+          orgName,
+          students: row.billTo,
+          universities: row.category,
+          documentTitle: branding.documentTitle || 'Invoice',
+        };
+        const subject =
+          email?.subject?.trim() ||
+          applyInvoiceTemplate(
+            branding.emailSubject || 'Invoice {{invoiceNo}}',
+            tplVars,
+          );
+        const text =
+          email?.body?.trim() ||
+          applyInvoiceTemplate(branding.emailBody || '', tplVars);
+        const html = buildInvoiceEmailHtml(text);
+        const { buffer: pdf, filename } = await this.buildPdfBuffer(id, scope);
+        await this.mail.sendMail({
+          to,
+          cc: email?.cc,
+          subject,
+          text,
+          html,
+          attachments: [
+            {
+              filename,
+              content: pdf,
+              contentType: 'application/pdf',
+            },
+          ],
+        });
+        emailSent = true;
+      } catch (err) {
+        emailError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    await this.audit.log({
+      userId: user.id,
+      action: 'SEND',
+      module: 'Other Invoices',
+      entityType: 'OtherInvoice',
+      entityId: id,
+      afterData: {
+        invoiceNo: row.invoiceNo,
+        emailTo: to || null,
+        emailSent,
+        emailError,
+      },
+    });
+
+    return {
+      ...row,
+      emailSent,
+      emailError,
+      message: emailSent
+        ? 'Other invoice sent and email delivered'
+        : to
+          ? `Other invoice updated; email failed: ${emailError}`
+          : before.status === OtherInvoiceStatus.Draft
+            ? 'Other invoice marked Sent (no email address provided)'
+            : 'Resend logged (no email address provided)',
+    };
   }
 }

@@ -208,6 +208,37 @@ export class RevenueController {
     );
   }
 
+  @Get('other-invoices/:id/pdf')
+  @RequirePermission(MODULE_CODES.INVOICES_RECEIVABLES, 'read')
+  async otherInvoicePdf(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUserPayload,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.otherInvoices.buildPdfBuffer(
+      id,
+      this.scope(user, req),
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', String(buffer.length));
+    res.send(buffer);
+  }
+
+  @Post('other-invoices/:id/send')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission(MODULE_CODES.INVOICES_RECEIVABLES, 'full')
+  sendOther(
+    @Param('id') id: string,
+    @Body()
+    body: { to?: string; cc?: string; subject?: string; body?: string },
+    @CurrentUser() user: AuthUserPayload,
+    @Req() req: Request,
+  ) {
+    return this.otherInvoices.send(id, user, this.scope(user, req), body);
+  }
+
   // ── Receivables / allocation ───────────────────────────────────────────────
 
   @Get('receivables')

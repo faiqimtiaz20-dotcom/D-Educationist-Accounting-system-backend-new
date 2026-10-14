@@ -15,6 +15,7 @@ import { ApprovalsSyncService } from './approvals-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import type { AuthUserPayload } from '../common/decorators';
 import type { RequestBranchScope } from '../common/branch-scope.interceptor';
+import { canSelfApproveExpense } from '../common/rbac';
 
 const TYPE_LABEL: Record<ApprovalType, string> = {
   Expense: 'Expense',
@@ -120,9 +121,16 @@ export class ApprovalsService {
       throw new ConflictException('Approval already decided');
     }
     if (row.requestedById === user.id) {
-      throw new ForbiddenException(
-        'Segregation of duties: you cannot approve your own request',
-      );
+      const expenseSelfOk =
+        row.approvalType === ApprovalType.Expense &&
+        canSelfApproveExpense(user.roleCode);
+      if (!expenseSelfOk) {
+        throw new ForbiddenException(
+          row.approvalType === ApprovalType.Expense
+            ? 'Segregation of duties: cashiers cannot approve their own expense request'
+            : 'Segregation of duties: you cannot approve your own request',
+        );
+      }
     }
 
     // Apply to source document first (GL side effects where applicable)

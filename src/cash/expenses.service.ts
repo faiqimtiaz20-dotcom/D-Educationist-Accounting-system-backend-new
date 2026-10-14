@@ -14,6 +14,7 @@ import { runGlTransaction } from '../common/gl-transaction';
 import type { AuthUserPayload } from '../common/decorators';
 import type { RequestBranchScope } from '../common/branch-scope.interceptor';
 import { resolveWritableBranchId } from '../common/branch-scope';
+import { canSelfApproveExpense } from '../common/rbac';
 import { CreateExpenseDto, UpdateExpenseDto } from './dto/cash.dto';
 import { ApprovalsSyncService } from '../operations/approvals-sync.service';
 
@@ -368,9 +369,13 @@ export class ExpensesService {
     if (before.approvalStatus === ApprovalStatus.Rejected) {
       throw new ConflictException('Rejected expenses cannot be approved');
     }
-    if (before.requestedById && before.requestedById === user.id) {
+    if (
+      before.requestedById &&
+      before.requestedById === user.id &&
+      !canSelfApproveExpense(user.roleCode)
+    ) {
       throw new ForbiddenException(
-        'Segregation of duties: you cannot approve your own request',
+        'Segregation of duties: cashiers cannot approve their own expense request',
       );
     }
     await this.fiscal.assertNotLocked(before.expenseDate);
