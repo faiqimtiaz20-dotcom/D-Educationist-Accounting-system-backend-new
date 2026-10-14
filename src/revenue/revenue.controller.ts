@@ -24,6 +24,7 @@ import {
   CreateReceivableDto,
   UpdateInvoiceDto,
   UpdateOtherInvoiceDto,
+  UpdateReceivableDto,
 } from './dto/revenue.dto';
 import {
   CurrentUser,
@@ -240,6 +241,17 @@ export class RevenueController {
       user,
       this.scope(user, req),
     );
+  }
+
+  @Patch('receivables/:id')
+  @RequirePermission(MODULE_CODES.INVOICES_RECEIVABLES, 'full')
+  updateReceivable(
+    @Param('id') id: string,
+    @Body() dto: UpdateReceivableDto,
+    @CurrentUser() user: AuthUserPayload,
+    @Req() req: Request,
+  ) {
+    return this.receivables.update(id, dto, user, this.scope(user, req));
   }
 
   @Delete('receivables/:id')

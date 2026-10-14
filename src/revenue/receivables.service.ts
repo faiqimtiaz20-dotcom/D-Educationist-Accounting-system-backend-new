@@ -23,6 +23,7 @@ import { resolveWritableBranchId } from '../common/branch-scope';
 import {
   ConfirmAllocationDto,
   CreateReceivableDto,
+  UpdateReceivableDto,
 } from './dto/revenue.dto';
 import { rethrowPrismaAsHttp } from '../common/prisma-http';
 
@@ -264,6 +265,245 @@ export class ReceivablesService {
     return this.get(row.id, scope);
   }
 
+  /**
+   * Update remittance (amount / FX / bank / date). Reverses the prior JE so a
+   * corrected receipt can re-post — FX gain/loss then reflect the new rate.
+   */
+  async update(
+    id: string,
+    dto: UpdateReceivableDto,
+    user: AuthUserPayload,
+    scope: RequestBranchScope,
+  ) {
+    const before = await this.get(id, scope);
+    if (
+      before.isBulkRemittance &&
+      before.allocationStatus === AllocationStatus.allocated
+    ) {
+      throw new ConflictException(
+        'Cannot edit an allocated bulk remittance — reverse allocations first',
+      );
+    }
+
+    const amountReceived =
+      dto.amountReceived !== undefined
+        ? Number(dto.amountReceived)
+        : Number(before.amountReceived);
+    const exchangeRate =
+      dto.exchangeRate !== undefined
+        ? Number(dto.exchangeRate)
+        : Number(before.exchangeRate);
+    const bankAccountId = dto.bankAccountId ?? before.bankAccountId;
+    const currencyCode = (
+      dto.currencyCode ?? before.currencyCode
+    ).toUpperCase();
+    const receiptDate = dto.receiptDate
+      ? this.parseDate(dto.receiptDate)
+      : before.receiptDate;
+
+    if (!Number.isFinite(amountReceived) || amountReceived <= 0) {
+      throw new BadRequestException('Amount must be greater than zero');
+    }
+    if (!Number.isFinite(exchangeRate) || exchangeRate < 0) {
+      throw new BadRequestException('Invalid exchange rate');
+    }
+
+    await this.fiscal.assertNotLocked(before.receiptDate);
+    await this.fiscal.assertNotLocked(receiptDate);
+
+    const bank = await this.prisma.bankAccount.findFirst({
+      where: { id: bankAccountId, deletedAt: null, isActive: true },
+    });
+    if (!bank) throw new BadRequestException('Invalid bank account');
+
+    const currency = await this.prisma.currency.findUnique({
+      where: { code: currencyCode },
+    });
+    if (!currency) {
+      throw new BadRequestException(`Unknown currency ${currencyCode}`);
+    }
+
+    let invoiceNo: string | undefined;
+    let arClearedPkr: number | undefined;
+    if (!before.isBulkRemittance && before.invoiceId) {
+      const { outstanding, inv } = await this.invoiceOutstanding(
+        before.invoiceId,
+      );
+      // Outstanding already includes this receipt — free it back for the new amount.
+      const available = round2(outstanding + Number(before.amountReceived));
+      if (amountReceived > available + 0.001) {
+        throw new BadRequestException(
+          `Amount exceeds outstanding ${available}`,
+        );
+      }
+      invoiceNo = inv.invoiceNo;
+      const invFx =
+        inv.exchangeRate != null
+          ? Number(inv.exchangeRate)
+          : exchangeRate;
+      arClearedPkr = round2(amountReceived * invFx);
+    }
+
+    const whtRate = await this.gl.getWhtRateFraction();
+    const gross = round2(amountReceived * exchangeRate);
+    const wht = round2(gross * whtRate);
+    const net = round2(gross - wht);
+    const isPartial =
+      dto.isPartial ??
+      (!before.isBulkRemittance && before.invoiceId
+        ? round2(
+            (await this.invoiceOutstanding(before.invoiceId)).outstanding +
+              Number(before.amountReceived) -
+              amountReceived,
+          ) > 0.001
+        : before.isPartial);
+
+    const financialChanged =
+      Math.abs(amountReceived - Number(before.amountReceived)) > 1e-9 ||
+      Math.abs(exchangeRate - Number(before.exchangeRate)) > 1e-9 ||
+      bankAccountId !== before.bankAccountId ||
+      currencyCode !== before.currencyCode ||
+      receiptDate.getTime() !== before.receiptDate.getTime();
+
+    let row;
+    try {
+      row = await runGlTransaction(this.prisma, async (tx) => {
+        if (financialChanged) {
+          await this.gl.reverseSourceJournal(tx, {
+            sourceType: before.isBulkRemittance
+              ? JournalSourceType.BulkReceivable
+              : JournalSourceType.Receivable,
+            sourceId: id,
+            reverseDate: receiptDate,
+            reason: `Reversal on edit of receipt ${before.receiptNo}`,
+            actorId: user.id,
+          });
+        }
+
+        const updated = await tx.receivable.update({
+          where: { id },
+          data: {
+            bankAccountId,
+            currencyCode,
+            amountReceived,
+            exchangeRate,
+            amountPkrGross: gross,
+            whtAmountPkr: wht,
+            amountPkrNet: net,
+            receiptDate,
+            ...(dto.reconciliationStatus !== undefined
+              ? { reconciliationStatus: dto.reconciliationStatus }
+              : {}),
+            isPartial,
+            ...(dto.notes !== undefined
+              ? { notes: dto.notes?.trim() || null }
+              : {}),
+          },
+          include,
+        });
+
+        if (financialChanged) {
+          // Allocated children settle from clearing, not bank.
+          const fromClearing = Boolean(
+            before.notes?.startsWith('Allocated from '),
+          );
+
+          if (before.isBulkRemittance) {
+            await this.gl.postBulkRemittance(tx, {
+              receivableId: id,
+              receiptNo: updated.receiptNo,
+              branchId: updated.branchId,
+              entryDate: receiptDate,
+              grossPkr: gross,
+              whtPkr: wht,
+              netPkr: net,
+              actorId: user.id,
+            });
+          } else {
+            await this.gl.postReceivableReceipt(tx, {
+              receivableId: id,
+              receiptNo: updated.receiptNo,
+              branchId: updated.branchId,
+              entryDate: receiptDate,
+              invoiceNo,
+              grossPkr: gross,
+              whtPkr: wht,
+              netPkr: net,
+              arClearedPkr,
+              fromClearing,
+              actorId: user.id,
+            });
+          }
+
+          const bankTxnDesc = before.isBulkRemittance
+            ? `Bulk remittance ${updated.receiptNo}`
+            : `University receipt ${updated.receiptNo}${invoiceNo ? ` — ${invoiceNo}` : ''}`;
+
+          const existingTxn = await tx.bankTransaction.findFirst({
+            where: { sourceType: 'Receivable', sourceId: id },
+          });
+          if (fromClearing) {
+            // Clearing settlements have no bank deposit at child level.
+            if (existingTxn) {
+              await tx.bankTransaction.delete({ where: { id: existingTxn.id } });
+            }
+          } else if (existingTxn) {
+            await tx.bankTransaction.update({
+              where: { id: existingTxn.id },
+              data: {
+                bankAccountId,
+                txnDate: receiptDate,
+                description: bankTxnDesc,
+                amount: net,
+              },
+            });
+          } else {
+            await tx.bankTransaction.create({
+              data: {
+                bankAccountId,
+                txnDate: receiptDate,
+                txnType: 'deposit',
+                description: bankTxnDesc,
+                amount: net,
+                currencyCode: 'PKR',
+                reconciliationStatus: 'Unmatched',
+                sourceType: 'Receivable',
+                sourceId: id,
+              },
+            });
+          }
+        }
+
+        return updated;
+      });
+    } catch (e) {
+      rethrowPrismaAsHttp(e);
+    }
+
+    if (before.invoiceId) {
+      await this.syncInvoiceStatus(before.invoiceId);
+    }
+
+    await this.audit.log({
+      userId: user.id,
+      action: 'UPDATE',
+      module: 'Receivables',
+      entityType: 'Receivable',
+      entityId: id,
+      beforeData: {
+        amountReceived: Number(before.amountReceived),
+        exchangeRate: Number(before.exchangeRate),
+      },
+      afterData: {
+        amountReceived,
+        exchangeRate,
+        financialChanged,
+      },
+    });
+
+    return this.get(row.id, scope);
+  }
+
   private async syncInvoiceStatus(invoiceId: string) {
     const inv = await this.prisma.invoice.findFirst({
       where: { id: invoiceId, deletedAt: null },
@@ -430,6 +670,9 @@ export class ReceivablesService {
         reverseDate: before.receiptDate,
         reason: `Reversal on delete of receipt ${before.receiptNo}`,
         actorId: user.id,
+      });
+      await tx.bankTransaction.deleteMany({
+        where: { sourceType: 'Receivable', sourceId: id },
       });
       await tx.receivableAllocation.deleteMany({
         where: { receivableId: id },

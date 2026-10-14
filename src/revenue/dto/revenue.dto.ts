@@ -283,6 +283,47 @@ export class CreateReceivableDto {
   notes?: string;
 }
 
+/** Partial update — reverse + re-post GL when financial fields change. */
+export class UpdateReceivableDto {
+  @IsOptional()
+  @IsUUID()
+  bankAccountId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  @MaxLength(3)
+  currencyCode?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.01)
+  amountReceived?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  exchangeRate?: number;
+
+  @IsOptional()
+  @IsString()
+  receiptDate?: string;
+
+  @IsOptional()
+  @IsEnum(ReconciliationStatus)
+  reconciliationStatus?: ReconciliationStatus;
+
+  @IsOptional()
+  @IsBoolean()
+  isPartial?: boolean;
+
+  @IsOptional()
+  @IsString()
+  notes?: string | null;
+}
+
 export class AllocationItemDto {
   @IsUUID()
   invoiceId!: string;
