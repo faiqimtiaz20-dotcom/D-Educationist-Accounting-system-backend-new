@@ -16,12 +16,17 @@ import type { RequestBranchScope } from '../common/branch-scope.interceptor';
 import { resolveWritableBranchId } from '../common/branch-scope';
 import {
   CreateOtherInvoiceDto,
+  RecordOtherInvoicePaymentDto,
   UpdateOtherInvoiceDto,
 } from './dto/revenue.dto';
 
 const include = {
   lines: { orderBy: { lineNo: 'asc' as const } },
   branch: { select: { id: true, code: true, name: true } },
+  receipts: {
+    where: { deletedAt: null },
+    orderBy: { receiptDate: 'desc' as const },
+  },
 } satisfies Prisma.OtherInvoiceInclude;
 
 @Injectable()
@@ -96,6 +101,11 @@ export class OtherInvoicesService {
     const invoiceDate = this.parseDate(dto.invoiceDate);
     await this.fiscal.assertNotLocked(invoiceDate);
     const status = dto.status ?? OtherInvoiceStatus.Draft;
+    if (status === OtherInvoiceStatus.Paid) {
+      throw new BadRequestException(
+        'Use Record payment after Send to mark Paid (posts bank + GL)',
+      );
+    }
     const fx = await this.gl.getFxRateToPkr(dto.currencyCode, invoiceDate);
 
     const row = await runGlTransaction(this.prisma, async (tx) => {
@@ -165,6 +175,12 @@ export class OtherInvoicesService {
       before.status === OtherInvoiceStatus.Draft &&
       nextStatus !== OtherInvoiceStatus.Draft;
 
+    if (dto.status === OtherInvoiceStatus.Paid) {
+      throw new BadRequestException(
+        'Use Record payment to mark an other invoice Paid (posts bank + GL)',
+      );
+    }
+
     const postedToGl = before.status !== OtherInvoiceStatus.Draft;
     if (postedToGl) {
       if (dto.lines) {
@@ -187,6 +203,15 @@ export class OtherInvoicesService {
       dto.status === OtherInvoiceStatus.Draft
     ) {
       throw new BadRequestException('Cannot revert a posted invoice to Draft');
+    }
+
+    if (
+      before.status === OtherInvoiceStatus.Paid ||
+      before.status === OtherInvoiceStatus.Closed
+    ) {
+      throw new ConflictException(
+        'Paid / Closed other invoices cannot be edited — reverse the receipt first',
+      );
     }
 
     const row = await runGlTransaction(this.prisma, async (tx) => {
@@ -256,6 +281,12 @@ export class OtherInvoicesService {
     const before = await this.get(id, scope);
     await this.fiscal.assertNotLocked(before.invoiceDate);
 
+    if (before.receipts.length > 0) {
+      throw new ConflictException(
+        'Delete receipts / reverse payments before deleting this other invoice',
+      );
+    }
+
     await runGlTransaction(this.prisma, async (tx) => {
       await this.gl.reverseSourceJournal(tx, {
         sourceType: JournalSourceType.OtherInvoice,
@@ -279,5 +310,149 @@ export class OtherInvoicesService {
       beforeData: { invoiceNo: before.invoiceNo },
     });
     return { success: true };
+  }
+
+  private async nextReceiptNo(branchId: string, tx: Prisma.TransactionClient) {
+    const branch = await tx.branch.findUniqueOrThrow({ where: { id: branchId } });
+    const year = new Date().getFullYear();
+    const prefix = `ORCPT-${branch.code}-${year}-`;
+    const latest = await tx.otherInvoiceReceipt.findFirst({
+      where: { receiptNo: { startsWith: prefix } },
+      orderBy: { receiptNo: 'desc' },
+    });
+    let next = 1;
+    if (latest?.receiptNo) {
+      const n = parseInt(latest.receiptNo.slice(prefix.length), 10);
+      if (!Number.isNaN(n)) next = n + 1;
+    }
+    return `${prefix}${String(next).padStart(3, '0')}`;
+  }
+
+  /**
+   * Record payment against a Sent other invoice — posts Dr Bank / Cr AR and a bank deposit.
+   */
+  async recordPayment(
+    id: string,
+    dto: RecordOtherInvoicePaymentDto,
+    user: AuthUserPayload,
+    scope: RequestBranchScope,
+  ) {
+    const invoice = await this.get(id, scope);
+    if (invoice.status !== OtherInvoiceStatus.Sent) {
+      throw new BadRequestException(
+        'Only Sent other invoices can receive payment',
+      );
+    }
+
+    const receiptDate = this.parseDate(dto.receiptDate);
+    await this.fiscal.assertNotLocked(receiptDate);
+
+    const bank = await this.prisma.bankAccount.findFirst({
+      where: { id: dto.bankAccountId, deletedAt: null, isActive: true },
+    });
+    if (!bank) throw new NotFoundException('Bank account not found');
+    this.assertBranch(scope, bank.branchId);
+
+    const totalFc = this.total(invoice.lines);
+    const paidFc = round2(
+      invoice.receipts.reduce((s, r) => s + Number(r.amountReceived), 0),
+    );
+    const outstandingFc = round2(totalFc - paidFc);
+    if (outstandingFc <= 0) {
+      throw new BadRequestException('Other invoice is already fully paid');
+    }
+    if (round2(dto.amountReceived) - outstandingFc > 0.01) {
+      throw new BadRequestException(
+        `Payment ${dto.amountReceived} exceeds outstanding ${outstandingFc}`,
+      );
+    }
+
+    const accrualFx = await this.gl.getFxRateToPkr(
+      invoice.currencyCode,
+      invoice.invoiceDate,
+    );
+    const receiptFx =
+      invoice.currencyCode === 'PKR' ? 1 : Number(dto.exchangeRate);
+    if (invoice.currencyCode !== 'PKR' && !(receiptFx > 0)) {
+      throw new BadRequestException('Exchange rate is required for non-PKR payments');
+    }
+
+    const amountFc = round2(dto.amountReceived);
+    const bankPkr = round2(amountFc * receiptFx);
+    const arClearedPkr = round2(amountFc * accrualFx);
+
+    const row = await runGlTransaction(this.prisma, async (tx) => {
+      const receiptNo = await this.nextReceiptNo(invoice.branchId, tx);
+      const receipt = await tx.otherInvoiceReceipt.create({
+        data: {
+          receiptNo,
+          otherInvoiceId: id,
+          branchId: invoice.branchId,
+          bankAccountId: dto.bankAccountId,
+          currencyCode: invoice.currencyCode,
+          amountReceived: amountFc,
+          exchangeRate: receiptFx,
+          amountPkr: bankPkr,
+          receiptDate,
+          notes: dto.notes?.trim() || null,
+          createdById: user.id,
+        },
+      });
+
+      await this.gl.postOtherInvoiceReceipt(tx, {
+        receiptId: receipt.id,
+        receiptNo: receipt.receiptNo,
+        invoiceNo: invoice.invoiceNo,
+        branchId: invoice.branchId,
+        entryDate: receiptDate,
+        bankPkr,
+        arClearedPkr,
+        actorId: user.id,
+      });
+
+      await tx.bankTransaction.create({
+        data: {
+          bankAccountId: dto.bankAccountId,
+          txnDate: receiptDate,
+          txnType: 'deposit',
+          description: `Other invoice receipt ${receipt.receiptNo} — ${invoice.invoiceNo}`,
+          amount: bankPkr,
+          currencyCode: 'PKR',
+          reconciliationStatus: 'Unmatched',
+          sourceType: 'OtherInvoiceReceipt',
+          sourceId: receipt.id,
+        },
+      });
+
+      const newPaid = round2(paidFc + amountFc);
+      const nextStatus =
+        newPaid + 0.01 >= totalFc
+          ? OtherInvoiceStatus.Paid
+          : OtherInvoiceStatus.Sent;
+
+      await tx.otherInvoice.update({
+        where: { id },
+        data: { status: nextStatus },
+      });
+
+      return receipt;
+    });
+
+    await this.audit.log({
+      userId: user.id,
+      action: 'PAY',
+      module: 'Other Invoices',
+      entityType: 'OtherInvoiceReceipt',
+      entityId: row.id,
+      afterData: {
+        invoiceId: id,
+        invoiceNo: invoice.invoiceNo,
+        receiptNo: row.receiptNo,
+        amountReceived: amountFc,
+        amountPkr: bankPkr,
+      },
+    });
+
+    return this.get(id, scope);
   }
 }

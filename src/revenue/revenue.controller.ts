@@ -22,6 +22,7 @@ import {
   CreateInvoiceDto,
   CreateOtherInvoiceDto,
   CreateReceivableDto,
+  RecordOtherInvoicePaymentDto,
   UpdateInvoiceDto,
   UpdateOtherInvoiceDto,
   UpdateReceivableDto,
@@ -189,6 +190,22 @@ export class RevenueController {
     @Req() req: Request,
   ) {
     return this.otherInvoices.softDelete(id, user, this.scope(user, req));
+  }
+
+  @Post('other-invoices/:id/payments')
+  @RequirePermission(MODULE_CODES.INVOICES_RECEIVABLES, 'full')
+  payOther(
+    @Param('id') id: string,
+    @Body() dto: RecordOtherInvoicePaymentDto,
+    @CurrentUser() user: AuthUserPayload,
+    @Req() req: Request,
+  ) {
+    return this.otherInvoices.recordPayment(
+      id,
+      dto,
+      user,
+      this.scope(user, req),
+    );
   }
 
   // ── Receivables / allocation ───────────────────────────────────────────────

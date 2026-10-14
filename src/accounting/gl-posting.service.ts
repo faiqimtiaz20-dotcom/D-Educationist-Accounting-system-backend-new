@@ -294,6 +294,100 @@ export class GlPostingService {
     });
   }
 
+  /**
+   * Settle other-invoice AR into bank.
+   * Dr Bank (receipt PKR) ± FX; Cr AR (cleared at accrual FX).
+   */
+  async postOtherInvoiceReceipt(
+    tx: Tx,
+    input: {
+      receiptId: string;
+      receiptNo: string;
+      invoiceNo: string;
+      branchId: string;
+      entryDate: Date;
+      bankPkr: number;
+      arClearedPkr: number;
+      actorId?: string;
+    },
+  ) {
+    if (
+      await this.alreadyPosted(
+        JournalSourceType.OtherInvoiceReceipt,
+        input.receiptId,
+        tx,
+      )
+    ) {
+      return null;
+    }
+
+    const bank = round2(input.bankPkr);
+    const arCleared = round2(input.arClearedPkr);
+    if (bank <= 0 || arCleared <= 0) {
+      throw new BadRequestException('Other invoice receipt amounts must be positive');
+    }
+
+    const bankId = await this.resolveAccountId(GL_CODES.BANK, tx);
+    const arId = await this.resolveAccountId(GL_CODES.AR, tx);
+    const fxDiff = round2(bank - arCleared);
+    const entryNo = await this.nextEntryNo(tx);
+
+    const lines: Array<{
+      lineNo: number;
+      glAccountId: string;
+      debit: number;
+      credit: number;
+    }> = [{ lineNo: 1, glAccountId: bankId, debit: bank, credit: 0 }];
+    let lineNo = 2;
+
+    if (fxDiff < -0.005) {
+      const lossId = await this.resolveAccountId(GL_CODES.FX_LOSS, tx);
+      lines.push({
+        lineNo: lineNo++,
+        glAccountId: lossId,
+        debit: round2(-fxDiff),
+        credit: 0,
+      });
+    }
+
+    lines.push({
+      lineNo: lineNo++,
+      glAccountId: arId,
+      debit: 0,
+      credit: arCleared,
+    });
+
+    if (fxDiff > 0.005) {
+      const gainId = await this.resolveAccountId(GL_CODES.FX_GAIN, tx);
+      lines.push({
+        lineNo: lineNo++,
+        glAccountId: gainId,
+        debit: 0,
+        credit: fxDiff,
+      });
+    }
+
+    this.assertLinesBalanced(lines, 'OtherInvoiceReceipt');
+
+    return tx.journalEntry.create({
+      data: {
+        entryNo,
+        entryDate: input.entryDate,
+        branchId: input.branchId,
+        description: `Other invoice receipt ${input.receiptNo} — ${input.invoiceNo}`,
+        approvalStatus: ApprovalStatus.Approved,
+        sourceType: JournalSourceType.OtherInvoiceReceipt,
+        sourceId: input.receiptId,
+        isAutoPosted: true,
+        postedAt: new Date(),
+        createdById: input.actorId,
+        approvedById: input.actorId,
+        lines: { create: lines },
+      },
+      include: { lines: true },
+    });
+  }
+
   async postReceivableReceipt(
     tx: Tx,
     input: {

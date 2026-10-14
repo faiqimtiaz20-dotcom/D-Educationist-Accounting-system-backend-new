@@ -19,6 +19,7 @@ export const TENANTED_PRISMA_MODELS = new Set([
   'Student',
   'Invoice',
   'OtherInvoice',
+  'OtherInvoiceReceipt',
   'BankAccount',
   'Receivable',
   'SubAgentCommission',

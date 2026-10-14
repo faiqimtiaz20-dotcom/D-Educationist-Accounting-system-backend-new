@@ -132,6 +132,8 @@ enum JournalSourceType {
   BulkReceivable
   /// Opening balance on bank account create/update (Dr 1120 / Cr 3000)
   BankOpening
+  /// Cash receipt against other invoice (Dr Bank / Cr AR)
+  OtherInvoiceReceipt
 }
 
 enum ContraEntryType {
@@ -245,7 +247,8 @@ model Tenant {
   vendors             Vendor[]
   students            Student[]
   invoices            Invoice[]
-  otherInvoices       OtherInvoice[]
+  otherInvoices          OtherInvoice[]
+  otherInvoiceReceipts   OtherInvoiceReceipt[]
   bankAccounts        BankAccount[]
   receivables         Receivable[]
   subAgentCommissions SubAgentCommission[]
@@ -290,7 +293,8 @@ model Branch {
   userBranchAccess    UserBranchAccess[]
   students            Student[]
   invoices            Invoice[]
-  otherInvoices       OtherInvoice[]
+  otherInvoices          OtherInvoice[]
+  otherInvoiceReceipts   OtherInvoiceReceipt[]
   receivables         Receivable[]
   subAgentCommissions SubAgentCommission[]
   pettyCashEntries    PettyCashEntry[]
@@ -372,7 +376,8 @@ model User {
   updatedStudents         Student[]              @relation("StudentUpdatedBy")
   studentStatusChanges    StudentStatusHistory[]
   createdInvoices         Invoice[]              @relation("InvoiceCreatedBy")
-  createdOtherInvoices    OtherInvoice[]         @relation("OtherInvoiceCreatedBy")
+  createdOtherInvoices         OtherInvoice[]         @relation("OtherInvoiceCreatedBy")
+  createdOtherInvoiceReceipts  OtherInvoiceReceipt[]  @relation("OtherInvoiceReceiptCreatedBy")
   createdReceivables      Receivable[]           @relation("ReceivableCreatedBy")
   createdSubAgentPays     SubAgentPayment[]      @relation("SubAgentPaymentCreatedBy")
   createdPettyCash        PettyCashEntry[]       @relation("PettyCashCreatedBy")
@@ -438,6 +443,7 @@ model Currency {
   students              Student[]
   invoices              Invoice[]
   otherInvoices         OtherInvoice[]
+  otherInvoiceReceipts  OtherInvoiceReceipt[]
   receivables           Receivable[]
   receivableAllocations ReceivableAllocation[]
   subAgentCommissions   SubAgentCommission[]
@@ -894,10 +900,11 @@ model OtherInvoice {
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
-  branch    Branch             @relation(fields: [branchId], references: [id])
-  currency  Currency           @relation(fields: [currencyCode], references: [code])
-  createdBy User?              @relation("OtherInvoiceCreatedBy", fields: [createdById], references: [id])
+  branch    Branch                 @relation(fields: [branchId], references: [id])
+  currency  Currency               @relation(fields: [currencyCode], references: [code])
+  createdBy User?                  @relation("OtherInvoiceCreatedBy", fields: [createdById], references: [id])
   lines     OtherInvoiceLine[]
+  receipts  OtherInvoiceReceipt[]
 
   @@unique([tenantId, invoiceNo])
   @@index([tenantId])
@@ -920,6 +927,38 @@ model OtherInvoiceLine {
   @@map("other_invoice_lines")
 }
 
+model OtherInvoiceReceipt {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
+  receiptNo       String   @map("receipt_no") @db.VarChar(40)
+  otherInvoiceId  String   @map("other_invoice_id") @db.Uuid
+  branchId        String   @map("branch_id") @db.Uuid
+  bankAccountId   String   @map("bank_account_id") @db.Uuid
+  currencyCode    String   @map("currency_code") @db.Char(3)
+  amountReceived  Decimal  @map("amount_received") @db.Decimal(18, 2)
+  exchangeRate    Decimal  @map("exchange_rate") @db.Decimal(18, 6)
+  amountPkr       Decimal  @map("amount_pkr") @db.Decimal(18, 2)
+  receiptDate     DateTime @map("receipt_date") @db.Date
+  notes           String?
+  createdById     String?  @map("created_by") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  deletedAt       DateTime? @map("deleted_at")
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  otherInvoice OtherInvoice @relation(fields: [otherInvoiceId], references: [id])
+  branch       Branch       @relation(fields: [branchId], references: [id])
+  bankAccount  BankAccount  @relation(fields: [bankAccountId], references: [id])
+  currency     Currency     @relation(fields: [currencyCode], references: [code])
+  createdBy    User?        @relation("OtherInvoiceReceiptCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([tenantId, receiptNo])
+  @@index([tenantId])
+  @@index([otherInvoiceId])
+  @@index([branchId, receiptDate])
+  @@map("other_invoice_receipts")
+}
+
 model BankAccount {
   id             String    @id @default(uuid()) @db.Uuid
   tenantId       String    @default("a0000000-0000-4000-8000-000000000001") @map("tenant_id") @db.Uuid
@@ -939,6 +978,7 @@ model BankAccount {
   branch           Branch            @relation(fields: [branchId], references: [id])
   currency         Currency          @relation(fields: [currencyCode], references: [code])
   receivables      Receivable[]
+  otherInvoiceReceipts OtherInvoiceReceipt[]
   subAgentPayments SubAgentPayment[]
   expenses         Expense[]
   transactions     BankTransaction[] @relation("BankTxnAccount")

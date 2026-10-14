@@ -237,6 +237,28 @@ export class UpdateOtherInvoiceDto {
   lines?: OtherInvoiceLineDto[];
 }
 
+export class RecordOtherInvoicePaymentDto {
+  @IsUUID()
+  bankAccountId!: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.01)
+  amountReceived!: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  exchangeRate!: number;
+
+  @IsString()
+  receiptDate!: string;
+
+  @IsOptional()
+  @IsString()
+  notes?: string;
+}
+
 export class CreateReceivableDto {
   @IsUUID()
   branchId!: string;
