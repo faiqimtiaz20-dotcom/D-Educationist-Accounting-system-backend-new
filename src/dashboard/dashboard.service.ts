@@ -284,34 +284,40 @@ export class DashboardService {
 
   async commissionByUniversity(scope: RequestBranchScope, take = 7) {
     const branchId = this.branchWhere(scope);
-    const lines = await this.prisma.invoiceLine.findMany({
+    // Query Invoice (tenant-scoped). InvoiceLine has no tenantId — querying it
+    // directly would leak commissions from every tenant.
+    const invoices = await this.prisma.invoice.findMany({
       where: {
-        invoice: {
-          deletedAt: null,
-          status: { not: InvoiceStatus.Draft },
-          ...(branchId ? { branchId } : {}),
-        },
+        deletedAt: null,
+        status: { not: InvoiceStatus.Draft },
+        ...(branchId ? { branchId } : {}),
       },
-      include: {
-        student: {
-          include: { university: { select: { name: true } } },
+      select: {
+        exchangeRate: true,
+        currencyCode: true,
+        invoiceDate: true,
+        lines: {
+          select: {
+            commissionAmount: true,
+            student: {
+              select: { university: { select: { name: true } } },
+            },
+          },
         },
-        invoice: { select: { exchangeRate: true, currencyCode: true, invoiceDate: true } },
       },
     });
 
     const map = new Map<string, number>();
-    for (const line of lines) {
-      const uni = line.student.university?.name ?? 'Unknown';
+    for (const inv of invoices) {
       const fx =
-        line.invoice.exchangeRate != null
-          ? Number(line.invoice.exchangeRate)
-          : await this.fxToPkr(
-              line.invoice.currencyCode,
-              line.invoice.invoiceDate,
-            );
-      const pkr = round2(Number(line.commissionAmount) * fx);
-      map.set(uni, round2((map.get(uni) ?? 0) + pkr));
+        inv.exchangeRate != null
+          ? Number(inv.exchangeRate)
+          : await this.fxToPkr(inv.currencyCode, inv.invoiceDate);
+      for (const line of inv.lines) {
+        const uni = line.student.university?.name ?? 'Unknown';
+        const pkr = round2(Number(line.commissionAmount) * fx);
+        map.set(uni, round2((map.get(uni) ?? 0) + pkr));
+      }
     }
 
     return Array.from(map.entries())
