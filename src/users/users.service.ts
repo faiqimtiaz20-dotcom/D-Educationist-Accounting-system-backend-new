@@ -17,6 +17,7 @@ import {
   canManageUsers,
   isTenantAdminRole,
 } from '../common/rbac';
+import { invalidateAuthUserCache } from '../common/auth-request-cache';
 import { requireTenantId } from '../common/tenant-scope';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -261,6 +262,8 @@ export class UsersService {
       throw err;
     }
 
+    invalidateAuthUserCache(id);
+
     if (dto.isActive === false) {
       await this.prisma.refreshToken.updateMany({
         where: { userId: id, revokedAt: null },
@@ -355,6 +358,7 @@ export class UsersService {
       where: { id },
       data: { deletedAt: new Date(), isActive: false },
     });
+    invalidateAuthUserCache(id);
 
     await this.audit.log({
       userId: actor.id,

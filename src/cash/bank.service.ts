@@ -49,27 +49,29 @@ export class BankService {
       orderBy: [{ name: 'asc' }],
     });
 
-    const withBalance = await Promise.all(
-      accounts.map(async (a) => {
-        const aggs = await this.prisma.bankTransaction.groupBy({
-          by: ['txnType'],
-          where: { bankAccountId: a.id },
-          _sum: { amount: true },
-        });
-        let movement = 0;
-        for (const g of aggs) {
-          const sum = Number(g._sum.amount ?? 0);
-          if (g.txnType === 'deposit') movement += sum;
-          else movement -= sum; // withdrawal + transfer out
-        }
-        return {
-          ...a,
-          balance: round2(Number(a.openingBalance) + movement),
-        };
-      }),
-    );
+    if (!accounts.length) return [];
 
-    return withBalance;
+    const aggs = await this.prisma.bankTransaction.groupBy({
+      by: ['bankAccountId', 'txnType'],
+      where: { bankAccountId: { in: accounts.map((a) => a.id) } },
+      _sum: { amount: true },
+    });
+    const movementByAccount = new Map<string, number>();
+    for (const g of aggs) {
+      const sum = Number(g._sum.amount ?? 0);
+      const delta = g.txnType === 'deposit' ? sum : -sum; // withdrawal + transfer out
+      movementByAccount.set(
+        g.bankAccountId,
+        (movementByAccount.get(g.bankAccountId) ?? 0) + delta,
+      );
+    }
+
+    return accounts.map((a) => ({
+      ...a,
+      balance: round2(
+        Number(a.openingBalance) + (movementByAccount.get(a.id) ?? 0),
+      ),
+    }));
   }
 
   listTransactions(scope: RequestBranchScope, bankAccountId?: string) {

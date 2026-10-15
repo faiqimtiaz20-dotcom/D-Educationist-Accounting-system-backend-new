@@ -43,21 +43,77 @@ export class DashboardService {
     return scope.branchId ?? undefined;
   }
 
-  private async fxToPkr(currencyCode: string, asOf: Date): Promise<number> {
-    if (currencyCode === 'PKR') return 1;
-    const rate = await this.prisma.fxRate.findFirst({
-      where: { currencyCode, effectiveDate: { lte: asOf } },
-      orderBy: { effectiveDate: 'desc' },
+  private static readonly FX_DEFAULTS: Record<string, number> = {
+    GBP: 355,
+    USD: 278,
+    CAD: 205,
+    AUD: 185,
+    EUR: 300,
+  };
+
+  /** Prefetch FX rows once, then resolve per invoice date in memory (avoids N+1). */
+  private async loadFxLookup(currencyCodes: string[]) {
+    const codes = [...new Set(currencyCodes.filter((c) => c && c !== 'PKR'))];
+    const byCode = new Map<string, Array<{ effectiveDate: Date; rateToPkr: number }>>();
+    if (!codes.length) {
+      return (currencyCode: string, asOf: Date) => {
+        if (currencyCode === 'PKR') return 1;
+        return DashboardService.FX_DEFAULTS[currencyCode] ?? 1;
+      };
+    }
+    const rows = await this.prisma.fxRate.findMany({
+      where: { currencyCode: { in: codes } },
+      select: { currencyCode: true, effectiveDate: true, rateToPkr: true },
+      orderBy: { effectiveDate: 'asc' },
     });
-    if (rate) return Number(rate.rateToPkr);
-    const defaults: Record<string, number> = {
-      GBP: 355,
-      USD: 278,
-      CAD: 205,
-      AUD: 185,
-      EUR: 300,
+    for (const r of rows) {
+      const list = byCode.get(r.currencyCode) ?? [];
+      list.push({
+        effectiveDate: r.effectiveDate,
+        rateToPkr: Number(r.rateToPkr),
+      });
+      byCode.set(r.currencyCode, list);
+    }
+    return (currencyCode: string, asOf: Date) => {
+      if (currencyCode === 'PKR') return 1;
+      const list = byCode.get(currencyCode);
+      if (!list?.length) {
+        return DashboardService.FX_DEFAULTS[currencyCode] ?? 1;
+      }
+      let best: number | null = null;
+      for (const row of list) {
+        if (row.effectiveDate.getTime() <= asOf.getTime()) {
+          best = row.rateToPkr;
+        } else break;
+      }
+      return best ?? DashboardService.FX_DEFAULTS[currencyCode] ?? 1;
     };
-    return defaults[currencyCode] ?? 1;
+  }
+
+  private async sumBankBalance(
+    accounts: Array<{ id: string; openingBalance: Prisma.Decimal | number }>,
+  ) {
+    if (!accounts.length) return 0;
+    const ids = accounts.map((a) => a.id);
+    const aggs = await this.prisma.bankTransaction.groupBy({
+      by: ['bankAccountId', 'txnType'],
+      where: { bankAccountId: { in: ids } },
+      _sum: { amount: true },
+    });
+    const movementByAccount = new Map<string, number>();
+    for (const g of aggs) {
+      const sum = Number(g._sum.amount ?? 0);
+      const delta = g.txnType === 'deposit' ? sum : -sum;
+      movementByAccount.set(
+        g.bankAccountId,
+        (movementByAccount.get(g.bankAccountId) ?? 0) + delta,
+      );
+    }
+    let total = 0;
+    for (const a of accounts) {
+      total += Number(a.openingBalance) + (movementByAccount.get(a.id) ?? 0);
+    }
+    return round2(total);
   }
 
   async metrics(scope: RequestBranchScope) {
@@ -113,13 +169,14 @@ export class DashboardService {
     }
     const pettyCashBalance = round2(pettyIn - pettyOut);
 
-    // Cash GL 1110 (debit-normal)
+    // Cash GL 1110 (debit-normal) — aggregate in DB instead of loading all lines
     const cashGl = await this.prisma.glAccount.findUnique({
       where: { tenantId_code: { tenantId: currentTenantId(), code: '1110' } },
+      select: { id: true },
     });
     let cashBalance = pettyCashBalance;
     if (cashGl) {
-      const cashLines = await this.prisma.journalLine.findMany({
+      const cashAgg = await this.prisma.journalLine.aggregate({
         where: {
           glAccountId: cashGl.id,
           journalEntry: {
@@ -128,17 +185,14 @@ export class DashboardService {
             ...(branchId ? { branchId } : {}),
           },
         },
-        select: { debit: true, credit: true },
+        _sum: { debit: true, credit: true },
       });
       cashBalance = round2(
-        cashLines.reduce(
-          (s, l) => s + Number(l.debit) - Number(l.credit),
-          0,
-        ),
+        Number(cashAgg._sum.debit ?? 0) - Number(cashAgg._sum.credit ?? 0),
       );
     }
 
-    // Bank balances from accounts + movements
+    // Bank balances — one groupBy for all accounts
     const accounts = await this.prisma.bankAccount.findMany({
       where: {
         deletedAt: null,
@@ -147,22 +201,7 @@ export class DashboardService {
       },
       select: { id: true, openingBalance: true },
     });
-    let bankBalance = 0;
-    for (const a of accounts) {
-      const aggs = await this.prisma.bankTransaction.groupBy({
-        by: ['txnType'],
-        where: { bankAccountId: a.id },
-        _sum: { amount: true },
-      });
-      let movement = 0;
-      for (const g of aggs) {
-        const sum = Number(g._sum.amount ?? 0);
-        if (g.txnType === 'deposit') movement += sum;
-        else movement -= sum;
-      }
-      bankBalance += Number(a.openingBalance) + movement;
-    }
-    bankBalance = round2(bankBalance);
+    const bankBalance = await this.sumBankBalance(accounts);
 
     // Outstanding AR (PKR)
     const invoices = await this.prisma.invoice.findMany({
@@ -171,18 +210,26 @@ export class DashboardService {
         status: { notIn: [InvoiceStatus.Draft, InvoiceStatus.Closed] },
         ...(branchId ? { branchId } : {}),
       },
-      include: {
+      select: {
+        exchangeRate: true,
+        currencyCode: true,
+        invoiceDate: true,
         lines: { select: { commissionAmount: true } },
         receivables: { select: { amountPkrGross: true } },
         allocations: { select: { allocatedAmountPkr: true } },
       },
     });
+    const fxForAr = await this.loadFxLookup(
+      invoices
+        .filter((inv) => inv.exchangeRate == null)
+        .map((inv) => inv.currencyCode),
+    );
     let outstandingReceivables = 0;
     for (const inv of invoices) {
       const fx =
         inv.exchangeRate != null
           ? Number(inv.exchangeRate)
-          : await this.fxToPkr(inv.currencyCode, inv.invoiceDate);
+          : fxForAr(inv.currencyCode, inv.invoiceDate);
       const totalFc = inv.lines.reduce(
         (s, l) => s + Number(l.commissionAmount),
         0,
@@ -237,14 +284,24 @@ export class DashboardService {
         invoiceDate: { gte: month.from, lt: month.to },
         ...(branchId ? { branchId } : {}),
       },
-      include: { lines: { select: { commissionAmount: true } } },
+      select: {
+        exchangeRate: true,
+        currencyCode: true,
+        invoiceDate: true,
+        lines: { select: { commissionAmount: true } },
+      },
     });
+    const fxForMonth = await this.loadFxLookup(
+      monthInvoices
+        .filter((inv) => inv.exchangeRate == null)
+        .map((inv) => inv.currencyCode),
+    );
     let monthlyRevenue = 0;
     for (const inv of monthInvoices) {
       const fx =
         inv.exchangeRate != null
           ? Number(inv.exchangeRate)
-          : await this.fxToPkr(inv.currencyCode, inv.invoiceDate);
+          : fxForMonth(inv.currencyCode, inv.invoiceDate);
       const totalFc = inv.lines.reduce(
         (s, l) => s + Number(l.commissionAmount),
         0,
@@ -307,12 +364,17 @@ export class DashboardService {
       },
     });
 
+    const fxLookup = await this.loadFxLookup(
+      invoices
+        .filter((inv) => inv.exchangeRate == null)
+        .map((inv) => inv.currencyCode),
+    );
     const map = new Map<string, number>();
     for (const inv of invoices) {
       const fx =
         inv.exchangeRate != null
           ? Number(inv.exchangeRate)
-          : await this.fxToPkr(inv.currencyCode, inv.invoiceDate);
+          : fxLookup(inv.currencyCode, inv.invoiceDate);
       for (const line of inv.lines) {
         const uni = line.student.university?.name ?? 'Unknown';
         const pkr = round2(Number(line.commissionAmount) * fx);
@@ -334,13 +396,21 @@ export class DashboardService {
         status: { notIn: [InvoiceStatus.Draft, InvoiceStatus.Closed] },
         ...(branchId ? { branchId } : {}),
       },
-      include: {
+      select: {
+        invoiceDate: true,
+        exchangeRate: true,
+        currencyCode: true,
         lines: { select: { commissionAmount: true } },
         receivables: { select: { amountPkrGross: true } },
         allocations: { select: { allocatedAmountPkr: true } },
       },
     });
 
+    const fxLookup = await this.loadFxLookup(
+      invoices
+        .filter((inv) => inv.exchangeRate == null)
+        .map((inv) => inv.currencyCode),
+    );
     const buckets = { '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 };
     const now = Date.now();
 
@@ -348,7 +418,7 @@ export class DashboardService {
       const fx =
         inv.exchangeRate != null
           ? Number(inv.exchangeRate)
-          : await this.fxToPkr(inv.currencyCode, inv.invoiceDate);
+          : fxLookup(inv.currencyCode, inv.invoiceDate);
       const totalPkr = round2(
         inv.lines.reduce((s, l) => s + Number(l.commissionAmount), 0) * fx,
       );
@@ -392,34 +462,36 @@ export class DashboardService {
     });
 
     const month = monthBounds();
-    const result: Array<{ name: string; code: string; profit: number; revenue: number; expenses: number }> = [];
-
-    for (const b of branches) {
-      const rev = await this.prisma.receivable.aggregate({
-        where: {
-          branchId: b.id,
-          receiptDate: { gte: month.from, lt: month.to },
-        },
-        _sum: { amountPkrNet: true },
-      });
-      const exp = await this.prisma.expense.aggregate({
-        where: {
-          branchId: b.id,
-          approvalStatus: ApprovalStatus.Approved,
-          expenseDate: { gte: month.from, lt: month.to },
-        },
-        _sum: { total: true },
-      });
-      const revenue = round2(Number(rev._sum.amountPkrNet ?? 0));
-      const expenses = round2(Number(exp._sum.total ?? 0));
-      result.push({
-        name: b.name.replace(/\s+Branch$/i, ''),
-        code: b.code,
-        revenue,
-        expenses,
-        profit: round2(revenue - expenses),
-      });
-    }
+    const result = await Promise.all(
+      branches.map(async (b) => {
+        const [rev, exp] = await Promise.all([
+          this.prisma.receivable.aggregate({
+            where: {
+              branchId: b.id,
+              receiptDate: { gte: month.from, lt: month.to },
+            },
+            _sum: { amountPkrNet: true },
+          }),
+          this.prisma.expense.aggregate({
+            where: {
+              branchId: b.id,
+              approvalStatus: ApprovalStatus.Approved,
+              expenseDate: { gte: month.from, lt: month.to },
+            },
+            _sum: { total: true },
+          }),
+        ]);
+        const revenue = round2(Number(rev._sum.amountPkrNet ?? 0));
+        const expenses = round2(Number(exp._sum.total ?? 0));
+        return {
+          name: b.name.replace(/\s+Branch$/i, ''),
+          code: b.code,
+          revenue,
+          expenses,
+          profit: round2(revenue - expenses),
+        };
+      }),
+    );
 
     return result.sort((a, b) => b.profit - a.profit);
   }
@@ -427,40 +499,46 @@ export class DashboardService {
   async monthlyTrend(scope: RequestBranchScope, months = 7) {
     const branchId = this.branchWhere(scope);
     const now = new Date();
-    const rows: Array<{ month: string; period: string; revenue: number; expenses: number }> = [];
-
+    const periods: Array<{ from: Date; to: Date; ym: string; label: string }> = [];
     for (let i = months - 1; i >= 0; i--) {
       const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
       const from = d;
       const to = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
-      const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-      const label = d.toLocaleString('en-PK', { month: 'short', timeZone: 'UTC' });
-
-      const rev = await this.prisma.receivable.aggregate({
-        where: {
-          ...(branchId ? { branchId } : {}),
-          receiptDate: { gte: from, lt: to },
-        },
-        _sum: { amountPkrNet: true },
-      });
-      const exp = await this.prisma.expense.aggregate({
-        where: {
-          ...(branchId ? { branchId } : {}),
-          approvalStatus: ApprovalStatus.Approved,
-          expenseDate: { gte: from, lt: to },
-        },
-        _sum: { total: true },
-      });
-
-      rows.push({
-        month: label,
-        period: ym,
-        revenue: round2(Number(rev._sum.amountPkrNet ?? 0)),
-        expenses: round2(Number(exp._sum.total ?? 0)),
+      periods.push({
+        from,
+        to,
+        ym: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`,
+        label: d.toLocaleString('en-PK', { month: 'short', timeZone: 'UTC' }),
       });
     }
 
-    return rows;
+    return Promise.all(
+      periods.map(async ({ from, to, ym, label }) => {
+        const [rev, exp] = await Promise.all([
+          this.prisma.receivable.aggregate({
+            where: {
+              ...(branchId ? { branchId } : {}),
+              receiptDate: { gte: from, lt: to },
+            },
+            _sum: { amountPkrNet: true },
+          }),
+          this.prisma.expense.aggregate({
+            where: {
+              ...(branchId ? { branchId } : {}),
+              approvalStatus: ApprovalStatus.Approved,
+              expenseDate: { gte: from, lt: to },
+            },
+            _sum: { total: true },
+          }),
+        ]);
+        return {
+          month: label,
+          period: ym,
+          revenue: round2(Number(rev._sum.amountPkrNet ?? 0)),
+          expenses: round2(Number(exp._sum.total ?? 0)),
+        };
+      }),
+    );
   }
 
   async counsellorDashboard(user: AuthUserPayload, scope: RequestBranchScope) {

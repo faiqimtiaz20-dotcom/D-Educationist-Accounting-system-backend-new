@@ -7,6 +7,10 @@ import {
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  appModuleIdCache,
+  rolePermissionCache,
+} from './auth-request-cache';
+import {
   AuthUserPayload,
   PERMISSION_KEY,
   PermissionRequirement,
@@ -66,20 +70,32 @@ export class PermissionsGuard implements CanActivate {
 
     if (user.isSuperAdmin) return true;
 
-    const module = await this.prisma.appModule.findUnique({
-      where: { code: requirement.moduleCode },
-    });
-    if (!module) {
-      throw new ForbiddenException(`Unknown module ${requirement.moduleCode}`);
+    let moduleId = appModuleIdCache.get(requirement.moduleCode);
+    if (!moduleId) {
+      const module = await this.prisma.appModule.findUnique({
+        where: { code: requirement.moduleCode },
+        select: { id: true },
+      });
+      if (!module) {
+        throw new ForbiddenException(`Unknown module ${requirement.moduleCode}`);
+      }
+      moduleId = module.id;
+      appModuleIdCache.set(requirement.moduleCode, moduleId);
     }
 
-    const row = await this.prisma.roleModulePermission.findUnique({
-      where: {
-        roleId_moduleId: { roleId: user.roleId, moduleId: module.id },
-      },
-    });
+    const permKey = `${user.roleId}:${moduleId}`;
+    let level = rolePermissionCache.get(permKey);
+    if (level === undefined) {
+      const row = await this.prisma.roleModulePermission.findUnique({
+        where: {
+          roleId_moduleId: { roleId: user.roleId, moduleId },
+        },
+        select: { level: true },
+      });
+      level = row?.level ?? ('none' as const);
+      rolePermissionCache.set(permKey, level);
+    }
 
-    const level = row?.level ?? 'none';
     if (!permissionAtLeast(level, requirement.minLevel)) {
       throw new ForbiddenException(
         `Requires ${requirement.moduleCode} >= ${requirement.minLevel}`,

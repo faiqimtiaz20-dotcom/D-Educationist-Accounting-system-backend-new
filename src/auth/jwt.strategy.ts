@@ -4,6 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUserPayload } from '../common/decorators';
+import { authUserCache } from '../common/auth-request-cache';
 import {
   canAccessAllTenantBranches,
   isCrmAdminRole,
@@ -32,7 +33,28 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     });
   }
 
+  private bindTenant(user: AuthUserPayload) {
+    if (isCrmAdminRole(user.roleCode)) {
+      TenantContext.enter({ tenantId: null, isPlatform: true });
+    } else if (user.tenantId) {
+      TenantContext.enter({ tenantId: user.tenantId, isPlatform: false });
+    }
+  }
+
   async validate(payload: JwtPayload): Promise<AuthUserPayload> {
+    const cached = authUserCache.get(payload.sub);
+    if (cached) {
+      if (
+        payload.tenantId != null &&
+        cached.tenantId != null &&
+        payload.tenantId !== cached.tenantId
+      ) {
+        throw new UnauthorizedException('Token tenant mismatch');
+      }
+      this.bindTenant(cached);
+      return cached;
+    }
+
     const user = await this.prisma.user.findFirst({
       where: { id: payload.sub, deletedAt: null, isActive: true },
       include: { role: true, branch: true, tenant: true },
@@ -56,20 +78,13 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       throw new UnauthorizedException('Tenant suspended');
     }
 
-    // Bind early so any guard/service before interceptor is tenant-safe
-    if (isCrmAdminRole(user.role.code)) {
-      TenantContext.enter({ tenantId: null, isPlatform: true });
-    } else if (user.tenantId) {
-      TenantContext.enter({ tenantId: user.tenantId, isPlatform: false });
-    }
-
     const branchIsHeadOffice = Boolean(user.branch?.isHeadOffice);
     const canViewAllBranches = canAccessAllTenantBranches(
       user.role.code,
       branchIsHeadOffice,
     );
 
-    return {
+    const authUser: AuthUserPayload = {
       id: user.id,
       email: user.email,
       fullName: user.fullName,
@@ -84,5 +99,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       canViewAllBranches,
       isCrmAdmin: isCrmAdminRole(user.role.code),
     };
+
+    authUserCache.set(user.id, authUser);
+    this.bindTenant(authUser);
+    return authUser;
   }
 }
